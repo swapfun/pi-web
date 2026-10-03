@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Keep pi-swap-web on top of the upstream pi-web project while retaining
+# local branding/customization commits.
+set -Eeuo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+branch="$(git branch --show-current)"
+if [[ "$branch" != "pi-swap-web" ]]; then
+  echo "错误：请在 pi-swap-web 分支上运行此命令（当前：${branch:-分离 HEAD}）" >&2
+  exit 1
+fi
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "错误：工作区有未提交改动，请先提交或暂存：" >&2
+  git status --short >&2
+  exit 1
+fi
+
+if ! git remote get-url upstream >/dev/null 2>&1; then
+  echo "错误：缺少 upstream 远程仓库。可执行：" >&2
+  echo "  git remote add upstream https://github.com/agegr/pi-web.git" >&2
+  exit 1
+fi
+
+echo "正在检查上游 pi-web 更新……"
+git fetch upstream main --tags
+before="$(git rev-parse HEAD)"
+upstream_head="$(git rev-parse upstream/main)"
+
+if [[ "$before" == "$upstream_head" ]]; then
+  echo "上游没有新提交。"
+  exit 0
+fi
+
+echo "正在把本地定制 rebase 到 upstream/main……"
+if ! git rebase upstream/main; then
+  cat >&2 <<'EOF'
+
+上游更新与本地定制发生冲突。
+请解决冲突后执行：
+  git add <已解决的文件>
+  git rebase --continue
+完成后重新执行：npm run update:upstream
+取消本次更新：git rebase --abort
+EOF
+  exit 1
+fi
+
+echo "正在同步依赖并重新构建……"
+npm ci --ignore-scripts
+npm run build
+
+after="$(git rev-parse HEAD)"
+if [[ "$before" == "$after" ]]; then
+  echo "更新完成（代码未发生变化）。"
+else
+  echo "更新完成：$(git rev-parse --short "$before") -> $(git rev-parse --short "$after")"
+fi
+echo "启动：npm start 或 pi-swap-web"
