@@ -28,8 +28,9 @@ echo "正在检查上游 pi-web 更新……"
 git fetch upstream main --tags
 before="$(git rev-parse HEAD)"
 upstream_head="$(git rev-parse upstream/main)"
+base="$(git merge-base HEAD upstream/main)"
 
-if [[ "$before" == "$upstream_head" ]]; then
+if [[ "$base" == "$upstream_head" ]]; then
   echo "上游没有新提交。"
   exit 0
 fi
