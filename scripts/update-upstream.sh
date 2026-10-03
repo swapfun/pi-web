@@ -49,6 +49,28 @@ EOF
   exit 1
 fi
 
+# Keep Next's built-in app-update check meaningful: the branded package uses
+# the upstream release number, while its package name remains pi-swap-web.
+upstream_version="$(git show upstream/main:package.json | node -e '
+let input = "";
+process.stdin.on("data", (chunk) => input += chunk);
+process.stdin.on("end", () => process.stdout.write(JSON.parse(input).version));
+')"
+node - "$upstream_version" <<'NODE'
+const fs = require("node:fs");
+const version = process.argv[2];
+for (const file of ["package.json", "package-lock.json"]) {
+  const data = JSON.parse(fs.readFileSync(file, "utf8"));
+  data.version = version;
+  if (data.packages?.[""]) data.packages[""].version = version;
+  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+}
+NODE
+if ! git diff --quiet -- package.json package-lock.json; then
+  git add package.json package-lock.json
+  git commit -m "chore: sync upstream pi-web version ${upstream_version}"
+fi
+
 echo "正在同步依赖并重新构建……"
 npm ci --ignore-scripts
 npm run build
