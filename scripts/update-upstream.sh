@@ -8,7 +8,7 @@ cd "$ROOT_DIR"
 
 # The repository is also used by the personalized 30142 development service.
 # Never replace its dependencies or .next output while it is running.
-SERVICE_NAME="${PI_SWAP_WEB_SERVICE:-pi-swap-web-30142.service}"
+SERVICE_NAME="${PI_SWAP_WEB_SERVICE:-pi-swap-web-30143.service}"
 service_was_active=0
 update_succeeded=0
 
