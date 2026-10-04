@@ -1236,14 +1236,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     () => getProjectActivity(allSessions, runningSessionIds, unreadSessionIds),
     [allSessions, runningSessionIds, unreadSessionIds],
   );
-  const titleUnreadProjectKeys = useMemo(
-    () => new Set(
-      allSessions
-        .filter((session) => titleUnreadSessionIds.has(session.id))
-        .map((session) => workspaceKeyOf(session)),
-    ),
-    [allSessions, titleUnreadSessionIds],
-  );
 
   // Any activity in a project other than the one currently selected — shown as
   // a dot on the (collapsed) selector button so it is visible without opening
@@ -1642,7 +1634,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             const activity = project ? projectActivity.get(project.key) : undefined;
             const hasRunning = Boolean(activity?.running);
             const hasUnread = Boolean(activity?.unread);
-            const hasTitleUnread = Boolean(project && titleUnreadProjectKeys.has(project.key));
             return (
               <button
                 key={`project-shortcut-${index}`}
@@ -1677,7 +1668,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 {project ? projectInitials(name) : "+"}
                 {hasRunning && <span aria-label="运行中" style={{ position: "absolute", top: -3, right: -3, width: 9, height: 9, borderRadius: "50%", border: "2px solid var(--bg-panel)", background: "#f97316", boxShadow: "0 0 0 2px color-mix(in srgb, #f97316 22%, transparent)" }} />}
                 {hasUnread && <span aria-label="有未读消息" style={{ position: "absolute", right: hasRunning ? -3 : -2, bottom: -2, minWidth: 9, height: 9, padding: 0, borderRadius: 5, border: "2px solid var(--bg-panel)", background: "#22c55e" }} />}
-                {hasTitleUnread && <span aria-label="有新消息" style={{ position: "absolute", left: hasRunning ? -3 : -2, bottom: -2, width: 9, height: 9, padding: 0, borderRadius: 5, border: "2px solid var(--bg-panel)", background: "#a855f7" }} />}
               </button>
             );
           })}
