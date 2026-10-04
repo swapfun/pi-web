@@ -5,7 +5,7 @@
   "description": "Static, backend-free showcase of the Pi Web UI for GitHub Pages",
   "scripts": {
     "predev": "node scripts/prepare-demo-files.mjs",
-    "dev": "next dev -H 127.0.0.1 -p 30142",
+    "dev": "next dev -H 0.0.0.0 -p 30142",
     "prebuild": "node scripts/prepare-demo-files.mjs",
     "build": "next build",
     "lint": "eslint .",

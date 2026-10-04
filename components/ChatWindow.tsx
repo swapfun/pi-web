@@ -55,6 +55,7 @@ interface Props {
   onSystemToolsChange?: (tools: ToolEntry[] | null) => void;
   onSystemInfoLoaderChange?: (loader: (() => Promise<void>) | null) => void;
   onSessionStatsChange?: (stats: SessionStatsInfo | null) => void;
+  onModelChange?: (model: { provider: string; modelId: string } | null) => void;
   onSessionStatsPanelOpen?: () => void;
   /** Opens Settings on a section: a bare `/mcp` that pi's built-in MCP extension owns opens Settings › MCP. */
   onOpenSettings?: (section: SettingsSection) => void;
@@ -74,7 +75,6 @@ interface Props {
 }
 const CHAT_MINIMAP_WIDTH = 36;
 const CHAT_COLUMN_PADDING = 16;
-
 function NewSessionUpdateLink({
   label,
 }: {
@@ -227,7 +227,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = fa
   );
 }
 
-export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initialScrollPosition, onScrollPositionChange, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onOpenSettings, onContextUsageChange, onOpenFile, onOpenSession, onAskInNewChat, quoteSelectionEnabled = false, initialPrompt, onInitialPromptConsumed, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio }: Props) {
+export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initialScrollPosition, onScrollPositionChange, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onModelChange, onSessionStatsPanelOpen, onOpenSettings, onContextUsageChange, onOpenFile, onOpenSession, onAskInNewChat, quoteSelectionEnabled = false, initialPrompt, onInitialPromptConsumed, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const completionNotificationsEnabled = session?.relation?.kind !== "subagent";
@@ -284,7 +284,18 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     onOpenSettings,
     deferInitialScroll: Boolean(pendingScrollRestore),
   });
+  const displayModelProvider = displayModelValue?.provider;
+  const displayModelId = displayModelValue?.modelId;
+  useEffect(() => {
+    onModelChange?.(displayModelProvider && displayModelId ? { provider: displayModelProvider, modelId: displayModelId } : null);
+  }, [displayModelProvider, displayModelId, onModelChange]);
+  useEffect(() => () => onModelChange?.(null), [onModelChange]);
+
   const sessionBusy = agentRunning || bashRunning;
+  const markTitleSessionRead = useCallback(() => {
+    if (!session?.id || typeof window === "undefined") return;
+    window.dispatchEvent(new CustomEvent("pi-web:title-session-read", { detail: { sessionId: session.id } }));
+  }, [session?.id]);
   const [quotedSelection, setQuotedSelection] = useState<{
     text: string;
     top: number;
@@ -452,6 +463,8 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   // Only render the last N messages initially. When the user scrolls to the
   // top, load another page while keeping the scroll position stable.
   const [visibleCount, setVisibleCount] = useState(VISIBLE_PAGE_SIZE);
+  const [processCollapseVersion, setProcessCollapseVersion] = useState(0);
+  const processBrowsingRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const messageContentRef = useRef<HTMLDivElement | null>(null);
   const prevScrollDistanceRef = useRef<number | null>(null);
@@ -468,6 +481,34 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     : undefined;
   const searchHistoryRef = useRef({ entryIds, historyCursor, hasEarlierMessages });
   searchHistoryRef.current = { entryIds, historyCursor, hasEarlierMessages };
+
+  useEffect(() => {
+    processBrowsingRef.current = false;
+    setProcessCollapseVersion(0);
+  }, [session?.id]);
+
+  // When the reader leaves the live tail and scrolls upward, collapse the
+  // execution details once. The final answer bubbles remain visible; only the
+  // verbose tool/thinking process is folded away.
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    let previousTop = container.scrollTop;
+    const onScroll = () => {
+      const currentTop = container.scrollTop;
+      const movingUp = currentTop < previousTop - 2;
+      if (movingUp && currentTop > 8 && !processBrowsingRef.current) {
+        processBrowsingRef.current = true;
+        setProcessCollapseVersion((version) => version + 1);
+      }
+      if (isScrollAtTail(currentTop, container.clientHeight, container.scrollHeight)) {
+        processBrowsingRef.current = false;
+      }
+      previousTop = currentTop;
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+  }, [scrollContainerRef, session?.id]);
 
   useLayoutEffect(() => {
     const sessionId = session?.id;
@@ -918,6 +959,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      onPointerDown={markTitleSessionRead}
     >
       {isDragOver && (
         <div className="pointer-events-none absolute inset-0 z-50 flex animate-[drop-zone-in_0.15s_ease_both] items-center justify-center bg-[rgba(37,99,235,0.06)] backdrop-blur-[1px]">
@@ -984,6 +1026,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
           // session grows past one screen.
           className="scrollbar-subtle min-w-0 flex-1 overflow-x-hidden overflow-y-auto pt-4 [scrollbar-gutter:stable]"
           style={{ visibility: pendingScrollRestore ? "hidden" : undefined }}
+          onWheel={markTitleSessionRead}
         >
           <div style={{ minWidth: 0, padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
             <div ref={messageContentRef} onPointerUp={captureQuotedSelection} style={{ width: "100%", minWidth: 0, maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>
@@ -1155,7 +1198,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
                           would otherwise stay open once its answer shows up, e.g. when
                           switching between an answered and an unanswered leaf of the same
                           turn. Manual toggles survive every other re-render. */}
-                      <ProcessDetailsGroup key={finalAnswerMessage ? "answered" : "unanswered"} messageCount={processViews.length} toolCallCount={processToolCount} defaultExpanded={!finalAnswerMessage} reveal={revealProcess} t={t}>
+                      <ProcessDetailsGroup key={`${finalAnswerMessage ? "answered" : "unanswered"}-${processCollapseVersion}`} messageCount={processViews.length} toolCallCount={processToolCount} defaultExpanded={processCollapseVersion === 0 && !finalAnswerMessage} reveal={revealProcess} t={t}>
                         {processViews}
                       </ProcessDetailsGroup>
                     </div>,

@@ -180,6 +180,9 @@ interface ValidatedProject {
 
 const UNREAD_SESSIONS_STORAGE_KEY = "pi-web:unread-session-ids";
 const LAST_CUSTOM_CWD_STORAGE_KEY = "pi-web:last-custom-cwd";
+const PROJECT_SHORTCUTS_STORAGE_KEY = "pi-web:project-shortcuts";
+const PROJECT_SHORTCUT_COUNT = 5;
+const TITLE_SESSION_READ_EVENT = "pi-web:title-session-read";
 const RUNNING_SESSIONS_POLL_MS = 2500;
 const SESSION_DETAILS_HYDRATION_DELAY_MS = 750;
 const SESSION_PANE_DEFAULT_HEIGHT = 320;
@@ -228,9 +231,66 @@ function saveUnreadSessionIds(ids: Set<string>): void {
   }
 }
 
+type ProjectShortcut = { projectKey: string | null; name?: string };
+
+function emptyProjectShortcuts(): ProjectShortcut[] {
+  return Array.from({ length: PROJECT_SHORTCUT_COUNT }, () => ({ projectKey: null }));
+}
+
+function loadProjectShortcuts(): ProjectShortcut[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(PROJECT_SHORTCUTS_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    return Array.from({ length: PROJECT_SHORTCUT_COUNT }, (_, index) => {
+      const slot = parsed[index];
+      if (!slot || typeof slot !== "object") return { projectKey: null };
+      const value = slot as { projectKey?: unknown; name?: unknown };
+      return {
+        projectKey: typeof value.projectKey === "string" && value.projectKey ? value.projectKey : null,
+        ...(typeof value.name === "string" && shortcutName(value.name) ? { name: shortcutName(value.name) } : {}),
+      };
+    });
+  } catch {
+    return null;
+  }
+}
+
+function saveProjectShortcuts(slots: ProjectShortcut[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PROJECT_SHORTCUTS_STORAGE_KEY, JSON.stringify(slots));
+  } catch {
+    // Persistence is best-effort.
+  }
+}
+
 /** Substitute the home dir prefix with ~ (no path truncation — see PathLabel) */
 function displayCwd(cwd: string, homeDir?: string): string {
   return (homeDir && cwd.startsWith(homeDir)) ? "~" + cwd.slice(homeDir.length) : cwd;
+}
+
+/** A friendly project label for the selector. Paths stay an implementation detail. */
+function projectDisplayName(root: string): string {
+  const normalized = root.replace(/[\\/]+$/u, "");
+  const name = normalized.split(/[\\/]/u).filter(Boolean).pop();
+  return name || "Project";
+}
+
+function projectInitials(name: string): string {
+  const han = name.match(/[\p{Script=Han}]/gu);
+  if (han?.length) return han.slice(0, 2).join("");
+  const english = name.match(/[a-z]/gi)?.join("") ?? "";
+  if (english) return english.slice(0, 4);
+  return name.slice(0, 2);
+}
+
+function shortcutName(value: string): string {
+  const han = value.match(/[\p{Script=Han}]/gu);
+  if (han?.length) return han.join("").slice(0, 3);
+  return (value.match(/[a-z]/gi)?.join("") ?? "").slice(0, 4);
 }
 
 /**
@@ -408,6 +468,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [homeDir, setHomeDir] = useState<string>("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [projectFilter, setProjectFilter] = useState("");
+  const [projectShortcuts, setProjectShortcuts] = useState<ProjectShortcut[] | null>(loadProjectShortcuts);
+  const [shortcutEditorOpen, setShortcutEditorOpen] = useState(false);
+  const [shortcutDraft, setShortcutDraft] = useState<ProjectShortcut[]>(emptyProjectShortcuts);
   const [wtFilter, setWtFilter] = useState("");
   const [customPathOpen, setCustomPathOpen] = useState(false);
   const [customPathValue, setCustomPathValue] = useState(loadLastCustomCwd);
@@ -440,6 +503,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [fileManagerError, setFileManagerError] = useState<string | null>(null);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
+  // Title badges are intentionally independent from Pi Web's existing unread state.
+  // They live only for this page session, so historical replies never get marked.
+  const [titleUnreadSessionIds, setTitleUnreadSessionIds] = useState<Set<string>>(() => new Set());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   const currentSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
   const previousSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
@@ -656,6 +722,21 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [unreadSessionIds]);
 
   useEffect(() => {
+    const handleTitleSessionRead = (event: Event) => {
+      const sessionId = (event as CustomEvent<{ sessionId?: unknown }>).detail?.sessionId;
+      if (typeof sessionId !== "string") return;
+      setTitleUnreadSessionIds((previous) => {
+        if (!previous.has(sessionId)) return previous;
+        const next = new Set(previous);
+        next.delete(sessionId);
+        return next;
+      });
+    };
+    window.addEventListener(TITLE_SESSION_READ_EVENT, handleTitleSessionRead);
+    return () => window.removeEventListener(TITLE_SESSION_READ_EVENT, handleTitleSessionRead);
+  }, []);
+
+  useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let controller: AbortController | null = null;
@@ -750,6 +831,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       setUnreadSessionIds((prev) => {
         const next = new Set(prev);
         runningSessionIds.forEach((id) => next.delete(id));
+        completedWithNotifications.forEach((id) => next.add(id));
+        return next;
+      });
+    }
+    if (completedWithNotifications.length > 0) {
+      setTitleUnreadSessionIds((prev) => {
+        const next = new Set(prev);
         completedWithNotifications.forEach((id) => next.add(id));
         return next;
       });
@@ -1090,13 +1178,40 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [selectedCwd, onNewSession]);
 
   const recentProjects = useMemo(() => getRecentProjects(allSessions), [allSessions]);
+  useEffect(() => {
+    if (projectShortcuts !== null || recentProjects.length === 0) return;
+    const initial = emptyProjectShortcuts();
+    recentProjects.slice(0, PROJECT_SHORTCUT_COUNT).forEach((project, index) => {
+      initial[index] = { projectKey: project.key };
+    });
+    setProjectShortcuts(initial);
+    saveProjectShortcuts(initial);
+  }, [projectShortcuts, recentProjects]);
+  const shortcutSlots = projectShortcuts ?? emptyProjectShortcuts();
   const showProjectFilter = recentProjects.length > 8;
   const visibleProjects = useMemo(() => {
     const query = projectFilter.trim().toLowerCase();
     return query
-      ? recentProjects.filter((project) => project.root.toLowerCase().includes(query))
+      ? recentProjects.filter((project) => projectDisplayName(project.root).toLowerCase().includes(query))
       : recentProjects;
   }, [projectFilter, recentProjects]);
+  const openShortcutEditor = useCallback(() => {
+    setShortcutDraft(shortcutSlots.map((slot) => ({ ...slot })));
+    setShortcutEditorOpen((open) => !open);
+  }, [shortcutSlots]);
+  const saveShortcutDraft = useCallback(() => {
+    const next = Array.from({ length: PROJECT_SHORTCUT_COUNT }, (_, index) => {
+      const slot = shortcutDraft[index] ?? { projectKey: null };
+      const name = shortcutName(slot.name ?? "");
+      return {
+        projectKey: slot.projectKey || null,
+        ...(name ? { name } : {}),
+      };
+    });
+    setProjectShortcuts(next);
+    saveProjectShortcuts(next);
+    setShortcutEditorOpen(false);
+  }, [shortcutDraft]);
 
   // Sessions of every worktree in the selected project are shown together
   const selectedProject = useMemo(() => projectFor(selectedCwd), [projectFor, selectedCwd]);
@@ -1163,6 +1278,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   return (
     <div
       ref={sessionPaneResizer.panelRef}
+      className="session-sidebar"
       style={{
         display: "flex",
         flexDirection: "column",
@@ -1213,7 +1329,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 flexShrink: 0,
                 transition: "background 0.12s, color 0.12s, border-color 0.12s",
               }}
-             title={selectedCwd ? t("sidebar.newSessionTitle", { path: selectedCwd }) : t("sidebar.selectProject")}
+             title={selectedCwd ? t("sidebar.newSessionTitle", { path: projectDisplayName(selectedProject?.root ?? selectedCwd) }) : t("sidebar.selectProject")}
               onMouseEnter={(e) => {
                 if (!selectedCwd) return;
                 e.currentTarget.style.background = "var(--bg-selected)";
@@ -1232,6 +1348,37 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               </svg>
               {t("sidebar.new")}
             </button>
+            {inactiveWorktreeSelector && (
+              <button
+                type="button"
+                aria-disabled="true"
+                tabIndex={-1}
+                title={inactiveWorktreeSelector.title}
+                aria-label={inactiveWorktreeSelector.label}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 32,
+                  height: 32,
+                  padding: 0,
+                  border: "1px solid var(--border)",
+                  borderRadius: 7,
+                  background: "var(--bg-hover)",
+                  color: "var(--text-dim)",
+                  cursor: "default",
+                  opacity: 0.82,
+                  flexShrink: 0,
+                }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <line x1="6" y1="3" x2="6" y2="15" />
+                  <circle cx="18" cy="6" r="3" />
+                  <circle cx="6" cy="18" r="3" />
+                  <path d="M18 9a9 9 0 0 1-9 9" />
+                </svg>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -1255,7 +1402,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         <div ref={dropdownRef} style={{ position: "relative" }}>
           <button
             onClick={() => setDropdownOpen((v) => !v)}
-            title={selectedProject?.root ?? selectedCwd ?? ""}
+            title={selectedProject ? projectDisplayName(selectedProject.root) : t("sidebar.selectProject")}
             style={{
               width: "100%",
               display: "flex",
@@ -1272,15 +1419,19 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             }}
           >
             {selectedCwd ? (
-              <PathLabel
-                text={displayCwd(selectedProject?.root ?? selectedCwd, homeDir)}
+              <span
                 style={{
                   flex: 1,
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 11,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  fontSize: 12,
+                  fontWeight: 600,
                   color: "var(--text)",
                 }}
-              />
+              >
+                {projectDisplayName(selectedProject?.root ?? selectedCwd)}
+              </span>
             ) : (
               <span
                 style={{
@@ -1384,7 +1535,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
                     }}
-                    title={project.root}
+                    title={projectDisplayName(project.root)}
                   >
                     {project.key === selectedProject?.key && (
                       <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
@@ -1392,7 +1543,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                       </svg>
                     )}
                     {project.key !== selectedProject?.key && <span style={{ width: 10, flexShrink: 0 }} />}
-                    <PathLabel text={displayCwd(project.root, homeDir)} style={{ flex: 1 }} />
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>
+                      {projectDisplayName(project.root)}
+                    </span>
                     {showProjectActivity(projectActivity.get(project.key), t)}
                   </button>
                 ))}
@@ -1455,6 +1608,116 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               </button>
           </AnimatedDropdown>
         </div>
+
+        <div
+          aria-label="常用项目"
+          style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, overflowX: "auto", padding: "1px 1px 2px" }}
+        >
+          {shortcutSlots.map((slot, index) => {
+            const project = slot.projectKey ? recentProjects.find((item) => item.key === slot.projectKey) : undefined;
+            const name = slot.name?.trim() || (project ? projectDisplayName(project.root) : `项目 ${index + 1}`);
+            const active = project?.key === selectedProject?.key;
+            const activity = project ? projectActivity.get(project.key) : undefined;
+            const hasRunning = Boolean(activity?.running);
+            const hasUnread = Boolean(activity?.unread);
+            return (
+              <button
+                key={`project-shortcut-${index}`}
+                type="button"
+                disabled={!project}
+                onClick={() => {
+                  if (!project) return;
+                  setSelectedCwd(project.root);
+                  setDropdownOpen(false);
+                  setProjectFilter("");
+                }}
+                title={project ? name : "点击右侧齿轮设置项目"}
+                aria-label={project ? `切换到项目 ${name}` : `设置项目 ${index + 1}`}
+                aria-pressed={active}
+                style={{
+                  width: 30,
+                  height: 30,
+                  padding: 0,
+                  flex: "0 0 auto",
+                  border: active ? "1px solid var(--accent)" : "1px solid var(--border)",
+                  borderRadius: 8,
+                  background: active ? "color-mix(in srgb, var(--accent) 16%, var(--bg))" : "var(--bg)",
+                  color: active ? "var(--accent)" : project ? "var(--text-muted)" : "var(--text-dim)",
+                  cursor: project ? "pointer" : "default",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: "-0.03em",
+                  opacity: project ? 1 : 0.55,
+                  position: "relative",
+                }}
+              >
+                {project ? projectInitials(name) : "+"}
+                {hasRunning && <span aria-label="运行中" style={{ position: "absolute", top: -3, right: -3, width: 9, height: 9, borderRadius: "50%", border: "2px solid var(--bg-panel)", background: "#f97316", boxShadow: "0 0 0 2px color-mix(in srgb, #f97316 22%, transparent)" }} />}
+                {hasUnread && <span aria-label="有未读消息" style={{ position: "absolute", right: hasRunning ? -3 : -2, bottom: -2, minWidth: 9, height: 9, padding: 0, borderRadius: 5, border: "2px solid var(--bg-panel)", background: "#22c55e" }} />}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            onClick={openShortcutEditor}
+            title="管理项目快捷键"
+            aria-label="管理项目快捷键"
+            aria-expanded={shortcutEditorOpen}
+            style={{
+              width: 30,
+              height: 30,
+              padding: 0,
+              flex: "0 0 auto",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              border: shortcutEditorOpen ? "1px solid var(--accent)" : "1px solid var(--border)",
+              borderRadius: 8,
+              background: shortcutEditorOpen ? "var(--bg-selected)" : "var(--bg)",
+              color: shortcutEditorOpen ? "var(--accent)" : "var(--text-muted)",
+              cursor: "pointer",
+            }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3.5 6.5h6l2 2h9v10h-17z" />
+              <path d="m13 15 4.5-4.5 2 2L15 17h-2z" />
+            </svg>
+          </button>
+        </div>
+
+        {shortcutEditorOpen && (
+          <div style={{ marginTop: 8, padding: "9px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg)", boxShadow: "0 4px 14px rgba(0,0,0,0.08)" }}>
+            <div style={{ marginBottom: 7, color: "var(--text)", fontSize: 12, fontWeight: 700 }}>管理项目快捷键</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {shortcutDraft.map((slot, index) => (
+                <div key={`shortcut-editor-${index}`} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <span style={{ width: 16, color: "var(--text-dim)", fontSize: 10, textAlign: "center" }}>{index + 1}</span>
+                  <select
+                    value={slot.projectKey ?? ""}
+                    aria-label={`第 ${index + 1} 个项目`}
+                    onChange={(event) => setShortcutDraft((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, projectKey: event.target.value || null } : item))}
+                    style={{ minWidth: 0, flex: 1, height: 27, padding: "0 4px", border: "1px solid var(--border)", borderRadius: 5, background: "var(--bg-panel)", color: "var(--text)", fontSize: 11 }}
+                  >
+                    <option value="">未设置</option>
+                    {recentProjects.map((project) => <option key={project.key} value={project.key}>{projectDisplayName(project.root)}</option>)}
+                  </select>
+                  <input
+                    value={slot.name ?? ""}
+                    maxLength={4}
+                    placeholder="NAME"
+                    aria-label={`第 ${index + 1} 个项目名称`}
+                    onChange={(event) => setShortcutDraft((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: shortcutName(event.target.value) } : item))}
+                    style={{ width: 62, height: 27, padding: "0 5px", border: "1px solid var(--border)", borderRadius: 5, background: "var(--bg-panel)", color: "var(--text)", fontSize: 11 }}
+                  />
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 9 }}>
+              <button type="button" onClick={() => setShortcutEditorOpen(false)} style={{ height: 27, padding: "0 9px", border: "1px solid var(--border)", borderRadius: 5, background: "var(--bg-hover)", color: "var(--text-muted)", fontSize: 11, cursor: "pointer" }}>取消</button>
+              <button type="button" onClick={saveShortcutDraft} style={{ height: 27, padding: "0 10px", border: 0, borderRadius: 5, background: "var(--accent)", color: "var(--accent-contrast)", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>保存</button>
+            </div>
+          </div>
+        )}
 
         {sessionSearchOpen && (
           <input
@@ -1791,42 +2054,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             </div>
           );
         })()}
-        {!sessionSearchOpen && inactiveWorktreeSelector && (
-          <button
-            type="button"
-            aria-disabled="true"
-            tabIndex={-1}
-            title={inactiveWorktreeSelector.title}
-            style={{
-              width: "100%",
-              height: 29,
-              boxSizing: "border-box",
-              marginTop: 6,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "0 10px",
-              border: "1px solid var(--border)",
-              borderRadius: 7,
-              background: "var(--bg-hover)",
-              color: "var(--text-dim)",
-              fontSize: 11,
-              lineHeight: 1.35,
-              whiteSpace: "nowrap",
-              textAlign: "left",
-              cursor: "default",
-              opacity: 0.82,
-            }}
-          >
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <line x1="6" y1="3" x2="6" y2="15" />
-              <circle cx="18" cy="6" r="3" />
-              <circle cx="6" cy="18" r="3" />
-              <path d="M18 9a9 9 0 0 1-9 9" />
-            </svg>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{inactiveWorktreeSelector.label}</span>
-          </button>
-        )}
       </div>
 
       {/* Session list */}
@@ -1895,6 +2122,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     isSelected={familySessions.some((session) => session.id === selectedSessionId)}
                     isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
                     isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
+                    titleUnread={familySessions.some((session) => titleUnreadSessionIds.has(session.id))}
                     onClick={() => handleSelectSessionFromList(family.root)}
                     onRenamed={loadSessions}
                     onDeleted={(id) => {
@@ -2210,6 +2438,7 @@ function SessionItem({
   isSelected,
   isRunning,
   isUnread,
+  titleUnread,
   onClick,
   onRenamed,
   onDeleted,
@@ -2222,6 +2451,7 @@ function SessionItem({
   isSelected: boolean;
   isRunning?: boolean;
   isUnread?: boolean;
+  titleUnread?: boolean;
   onClick: () => void;
   onRenamed?: () => void;
   onDeleted?: (id: string) => void;
@@ -2444,6 +2674,13 @@ function SessionItem({
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                 {title}
               </span>
+              {titleUnread && (
+                <span
+                  title={t("sidebar.newSessionActivity")}
+                  aria-label={t("sidebar.newSessionActivity")}
+                  style={{ width: 8, height: 8, flex: "0 0 auto", borderRadius: "50%", background: "#a855f7", boxShadow: "0 0 0 2px color-mix(in srgb, #a855f7 18%, transparent)" }}
+                />
+              )}
             </div>
             <div style={{ marginTop: 2, display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
               {isRunning ? (

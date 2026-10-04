@@ -1939,6 +1939,26 @@ span.token.table {
   }
 }
 
+/* Give navigation and status chrome a more comfortable reading size without
+   changing the conversation typography. */
+.session-sidebar [style*="font-size:11px"],
+.session-sidebar [style*="font-size: 11px"] {
+  font-size: 12px !important;
+}
+.session-sidebar [style*="font-size:10px"],
+.session-sidebar [style*="font-size: 10px"] {
+  font-size: 11px !important;
+}
+.top-toolbar-actions button,
+.top-toolbar-trust,
+.session-stats-toolbar {
+  font-size: 12px !important;
+}
+.session-info-popover,
+.session-info-popover * {
+  font-size: 13px !important;
+}
+
 /* While the software keyboard is up (set by useViewportHeight), only a few
    hundred pixels remain above it. Hand them to the conversation: collapse the
    model/controls row and the extension status shelf, and drop the home

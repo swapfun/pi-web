@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
+import { TopUsageStatus } from "./TopUsageStatus";
 import type { ChatScrollPosition } from "@/lib/chat-scroll-position";
 import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
@@ -326,6 +327,10 @@ export function AppShell() {
   const [contextUsage, setContextUsage] = useState<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
   const handleContextUsageChange = useCallback((usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => {
     setContextUsage(usage);
+  }, []);
+  const [activeModel, setActiveModel] = useState<{ provider: string; modelId: string } | null>(null);
+  const handleModelChange = useCallback((model: { provider: string; modelId: string } | null) => {
+    setActiveModel(model);
   }, []);
 
   // Single active panel — only one dropdown open at a time
@@ -1305,6 +1310,7 @@ export function AppShell() {
           textAlign: "left",
         }}
         data-mobile-trust-banner={mobileBanner ? "true" : undefined}
+        className="top-toolbar-trust"
       >
         <svg
           width="13"
@@ -1330,7 +1336,7 @@ export function AppShell() {
   const renderChatToolbarActions = (mobile: boolean) => {
     if (!mobile && !showChat) return null;
     return (
-      <div style={{ display: "flex", alignItems: "stretch", height: "100%" }}>
+      <div className="top-toolbar-actions" style={{ display: "flex", alignItems: "stretch", height: "100%" }}>
         <button
           type="button"
           onClick={() => {
@@ -1679,7 +1685,7 @@ export function AppShell() {
         aria-label={translate("session.title")}
         aria-pressed={activeTopPanel === "session"}
         aria-hidden={covered ? true : undefined}
-        className={mobile ? "mobile-session-stats" : undefined}
+        className={mobile ? "mobile-session-stats session-stats-toolbar" : "session-stats-toolbar"}
         data-mobile-toolbar-stats={mobile ? "true" : undefined}
         style={{
           marginLeft: mobile ? 0 : "auto",
@@ -1966,7 +1972,7 @@ export function AppShell() {
       {/* Center: chat */}
       <div inert={rightPanelFullWidth} style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
         {/* Top bar with sidebar toggle */}
-        <div ref={topBarRef} style={{ flexShrink: 0, background: "var(--bg-panel)" }}>
+        <div ref={topBarRef} className="app-top-bar" style={{ flexShrink: 0, background: "var(--bg-panel)" }}>
         <div style={{ display: "flex", alignItems: "center", position: "relative", borderBottom: "1px solid var(--border)", height: "calc(36px + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)" }}>
           <button
             onClick={handleSidebarToggle}
@@ -2067,6 +2073,10 @@ export function AppShell() {
             <>
               {renderProjectTrustWarning(false)}
               {renderChatToolbarActions(false)}
+              <TopUsageStatus
+                model={activeModel}
+                sessionCost={sessionStats?.cost ?? 0}
+              />
               {renderSessionStatsButton(false)}
             </>
           )}
@@ -2357,6 +2367,7 @@ export function AppShell() {
               onSystemToolsChange={handleSystemToolsChange}
               onSystemInfoLoaderChange={handleSystemInfoLoaderChange}
               onSessionStatsChange={handleSessionStatsChange}
+              onModelChange={handleModelChange}
               onSessionStatsPanelOpen={openSessionStatsPanel}
               onOpenSettings={openSettingsSection}
               onContextUsageChange={handleContextUsageChange}
