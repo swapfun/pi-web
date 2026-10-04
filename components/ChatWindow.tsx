@@ -27,6 +27,11 @@ import type { ToolEntry } from "@/lib/tool-presets";
 import type { SettingsSection } from "@/lib/settings-navigation";
 import { findChatScrollAnchor, type ChatScrollPosition } from "@/lib/chat-scroll-position";
 import {
+  NEW_MESSAGE_READ_EVENT,
+  NEW_MESSAGE_STORAGE_KEY,
+  loadNewMessageSessionIds,
+} from "@/lib/new-message-state";
+import {
   captureScrollDistance,
   getPromptAnchorSpacerHeight,
   getVisibleRenderWindow,
@@ -292,10 +297,41 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   useEffect(() => () => onModelChange?.(null), [onModelChange]);
 
   const sessionBusy = agentRunning || bashRunning;
+  const [showNewMessagePrompt, setShowNewMessagePrompt] = useState(false);
   const markTitleSessionRead = useCallback(() => {
     if (!session?.id || typeof window === "undefined") return;
-    window.dispatchEvent(new CustomEvent("pi-web:title-session-read", { detail: { sessionId: session.id } }));
+    setShowNewMessagePrompt(false);
+    window.dispatchEvent(new CustomEvent(NEW_MESSAGE_READ_EVENT, { detail: { sessionId: session.id } }));
   }, [session?.id]);
+  useEffect(() => {
+    const sync = () => {
+      setShowNewMessagePrompt(Boolean(session?.id && loadNewMessageSessionIds().has(session.id)));
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === NEW_MESSAGE_STORAGE_KEY) sync();
+    };
+    sync();
+    window.addEventListener(NEW_MESSAGE_READ_EVENT, sync);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(NEW_MESSAGE_READ_EVENT, sync);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [session?.id]);
+  const handleNewMessagePrompt = useCallback(() => {
+    scrollToBottom("smooth");
+    markTitleSessionRead();
+  }, [markTitleSessionRead, scrollToBottom]);
+  const handleMessageWheel = useCallback((event: { deltaY: number }) => {
+    // Scrolling upward from the tail is not proof that the user read the new reply.
+    if (event.deltaY <= 0) return;
+    window.requestAnimationFrame(() => {
+      const container = scrollContainerRef.current;
+      if (container && isScrollAtTail(container.scrollTop, container.clientHeight, container.scrollHeight)) {
+        markTitleSessionRead();
+      }
+    });
+  }, [markTitleSessionRead, scrollContainerRef]);
   const [quotedSelection, setQuotedSelection] = useState<{
     text: string;
     top: number;
@@ -959,7 +995,6 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      onPointerDown={markTitleSessionRead}
     >
       {isDragOver && (
         <div className="pointer-events-none absolute inset-0 z-50 flex animate-[drop-zone-in_0.15s_ease_both] items-center justify-center bg-[rgba(37,99,235,0.06)] backdrop-blur-[1px]">
@@ -1010,6 +1045,31 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
         <NoticeShelf notices={notices} floating onPauseChange={setNoticePaused} />
       </div>
 
+      {showNewMessagePrompt && (
+        <button
+          type="button"
+          onClick={handleNewMessagePrompt}
+          style={{
+            position: "absolute",
+            top: 12,
+            left: "50%",
+            zIndex: 41,
+            transform: "translateX(-50%)",
+            padding: "7px 14px",
+            border: "1px solid color-mix(in srgb, #a855f7 45%, var(--border))",
+            borderRadius: 999,
+            background: "color-mix(in srgb, #a855f7 12%, var(--bg-panel))",
+            color: "var(--text)",
+            boxShadow: "0 3px 12px rgba(0,0,0,0.14)",
+            cursor: "pointer",
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          有新消息，点击查看
+        </button>
+      )}
+
       <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {extensionDialog && (
           <ExtensionDialog key={extensionDialog.id} request={extensionDialog} waitingCount={waitingExtensionDialogCount} onRespond={respondToExtensionUi} />
@@ -1026,7 +1086,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
           // session grows past one screen.
           className="scrollbar-subtle min-w-0 flex-1 overflow-x-hidden overflow-y-auto pt-4 [scrollbar-gutter:stable]"
           style={{ visibility: pendingScrollRestore ? "hidden" : undefined }}
-          onWheel={markTitleSessionRead}
+          onWheel={handleMessageWheel}
         >
           <div style={{ minWidth: 0, padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
             <div ref={messageContentRef} onPointerUp={captureQuotedSelection} style={{ width: "100%", minWidth: 0, maxWidth: "var(--chat-content-max-width, 820px)", margin: "0 auto" }}>

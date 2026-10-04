@@ -16,6 +16,11 @@ import { DirectoryPicker } from "./DirectoryPicker";
 import { DismissButton } from "./DismissButton";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { SessionSearch } from "./SessionSearch";
+import {
+  NEW_MESSAGE_READ_EVENT,
+  loadNewMessageSessionIds,
+  saveNewMessageSessionIds,
+} from "@/lib/new-message-state";
 
 // Fixed row height for the session list. SessionItem renders at exactly this
 // height, so the list can be windowed (only the visible slice is mounted).
@@ -182,7 +187,6 @@ const UNREAD_SESSIONS_STORAGE_KEY = "pi-web:unread-session-ids";
 const LAST_CUSTOM_CWD_STORAGE_KEY = "pi-web:last-custom-cwd";
 const PROJECT_SHORTCUTS_STORAGE_KEY = "pi-web:project-shortcuts";
 const PROJECT_SHORTCUT_COUNT = 5;
-const TITLE_SESSION_READ_EVENT = "pi-web:title-session-read";
 const RUNNING_SESSIONS_POLL_MS = 2500;
 const SESSION_DETAILS_HYDRATION_DELAY_MS = 750;
 const SESSION_PANE_DEFAULT_HEIGHT = 320;
@@ -503,9 +507,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [fileManagerError, setFileManagerError] = useState<string | null>(null);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
-  // Title badges are intentionally independent from Pi Web's existing unread state.
-  // They live only for this page session, so historical replies never get marked.
-  const [titleUnreadSessionIds, setTitleUnreadSessionIds] = useState<Set<string>>(() => new Set());
+  // This reminder is intentionally independent from Pi Web's existing unread state.
+  // It is only created for completions observed while the session is in the background.
+  const [titleUnreadSessionIds, setTitleUnreadSessionIds] = useState<Set<string>>(() => loadNewMessageSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   const currentSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
   const previousSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
@@ -622,6 +626,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         const next = new Set([...prev].filter((id) => unreadEligibleIds.has(id)));
         return next.size === prev.size ? prev : next;
       });
+      setTitleUnreadSessionIds((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Set([...prev].filter((id) => unreadEligibleIds.has(id)));
+        return next.size === prev.size ? prev : next;
+      });
       setError(null);
     } catch (e) {
       if (loadId === sessionLoadIdRef.current) setError(String(e));
@@ -721,6 +730,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     saveUnreadSessionIds(unreadSessionIds);
   }, [unreadSessionIds]);
 
+  // Keep the separate new-message reminder across project switches and page reloads.
+  useEffect(() => {
+    saveNewMessageSessionIds(titleUnreadSessionIds);
+  }, [titleUnreadSessionIds]);
+
   useEffect(() => {
     const handleTitleSessionRead = (event: Event) => {
       const sessionId = (event as CustomEvent<{ sessionId?: unknown }>).detail?.sessionId;
@@ -732,8 +746,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         return next;
       });
     };
-    window.addEventListener(TITLE_SESSION_READ_EVENT, handleTitleSessionRead);
-    return () => window.removeEventListener(TITLE_SESSION_READ_EVENT, handleTitleSessionRead);
+    window.addEventListener(NEW_MESSAGE_READ_EVENT, handleTitleSessionRead);
+    return () => window.removeEventListener(NEW_MESSAGE_READ_EVENT, handleTitleSessionRead);
   }, []);
 
   useEffect(() => {
@@ -1222,6 +1236,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     () => getProjectActivity(allSessions, runningSessionIds, unreadSessionIds),
     [allSessions, runningSessionIds, unreadSessionIds],
   );
+  const titleUnreadProjectKeys = useMemo(
+    () => new Set(
+      allSessions
+        .filter((session) => titleUnreadSessionIds.has(session.id))
+        .map((session) => workspaceKeyOf(session)),
+    ),
+    [allSessions, titleUnreadSessionIds],
+  );
 
   // Any activity in a project other than the one currently selected — shown as
   // a dot on the (collapsed) selector button so it is visible without opening
@@ -1620,6 +1642,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             const activity = project ? projectActivity.get(project.key) : undefined;
             const hasRunning = Boolean(activity?.running);
             const hasUnread = Boolean(activity?.unread);
+            const hasTitleUnread = Boolean(project && titleUnreadProjectKeys.has(project.key));
             return (
               <button
                 key={`project-shortcut-${index}`}
@@ -1654,6 +1677,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 {project ? projectInitials(name) : "+"}
                 {hasRunning && <span aria-label="运行中" style={{ position: "absolute", top: -3, right: -3, width: 9, height: 9, borderRadius: "50%", border: "2px solid var(--bg-panel)", background: "#f97316", boxShadow: "0 0 0 2px color-mix(in srgb, #f97316 22%, transparent)" }} />}
                 {hasUnread && <span aria-label="有未读消息" style={{ position: "absolute", right: hasRunning ? -3 : -2, bottom: -2, minWidth: 9, height: 9, padding: 0, borderRadius: 5, border: "2px solid var(--bg-panel)", background: "#22c55e" }} />}
+                {hasTitleUnread && <span aria-label="有新消息" style={{ position: "absolute", left: hasRunning ? -3 : -2, bottom: -2, width: 9, height: 9, padding: 0, borderRadius: 5, border: "2px solid var(--bg-panel)", background: "#a855f7" }} />}
               </button>
             );
           })}
