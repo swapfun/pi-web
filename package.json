@@ -1,6 +1,6 @@
 {
   "name": "pi-swap-web",
-  "version": "0.10.1",
+  "version": "0.10.0",
   "description": "A customizable web UI for the pi coding agent",
   "homepage": "https://github.com/agegr/pi-web#readme",
   "repository": {
