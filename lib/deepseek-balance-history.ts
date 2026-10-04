@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import lockfile from "proper-lockfile";
 
 type HistoryEntry = {
   currency: string;
@@ -47,7 +48,7 @@ function readStore(): HistoryStore {
 function writeStore(store: HistoryStore): void {
   const path = storePath();
   mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp`;
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(store, null, 2)}\n`, "utf8");
   renameSync(temporary, path);
 }
@@ -81,29 +82,43 @@ function prune(entry: HistoryEntry, now: number): void {
   }
 }
 
-export function recordDeepSeekBalance(payload: Record<string, unknown>, apiKey: string | undefined, now = Date.now()): { currency: string; todaySpend: number } | null {
+export async function recordDeepSeekBalance(payload: Record<string, unknown>, apiKey: string | undefined, now = Date.now()): Promise<{ currency: string; todaySpend: number } | null> {
   const balance = selectBalance(payload);
   if (!balance) return null;
-  const store = readStore();
-  const key = accountKey(apiKey);
-  const previous = store.accounts[key];
-  const entry: HistoryEntry = previous && previous.currency === balance.currency
-    ? previous
-    : { currency: balance.currency, trackingSince: now, lastPaid: null, allTimeSpend: 0, dailySpend: {} };
 
-  if (entry.lastPaid !== null && balance.paid < entry.lastPaid) {
-    const spend = round2(entry.lastPaid - balance.paid);
-    const day = localDayKey(now);
-    entry.dailySpend[day] = round2((entry.dailySpend[day] ?? 0) + spend);
-    entry.allTimeSpend = round2(entry.allTimeSpend + spend);
+  const path = storePath();
+  mkdirSync(dirname(path), { recursive: true });
+  const release = await lockfile.lock(path, {
+    realpath: false,
+    stale: 15_000,
+    retries: { retries: 8, minTimeout: 25, maxTimeout: 250 },
+  });
+  try {
+    // Read only after acquiring the lock so concurrent requests cannot overwrite
+    // each other's account baseline or daily total.
+    const store = readStore();
+    const key = accountKey(apiKey);
+    const previous = store.accounts[key];
+    const entry: HistoryEntry = previous && previous.currency === balance.currency
+      ? previous
+      : { currency: balance.currency, trackingSince: now, lastPaid: null, allTimeSpend: 0, dailySpend: {} };
+
+    if (entry.lastPaid !== null && balance.paid < entry.lastPaid) {
+      const spend = round2(entry.lastPaid - balance.paid);
+      const day = localDayKey(now);
+      entry.dailySpend[day] = round2((entry.dailySpend[day] ?? 0) + spend);
+      entry.allTimeSpend = round2(entry.allTimeSpend + spend);
+    }
+    // Increases are top-ups/refunds, not consumption. Updating the baseline here
+    // prevents the next observation from counting the top-up as negative spend.
+    entry.lastPaid = balance.paid;
+    prune(entry, now);
+    store.accounts[key] = entry;
+    writeStore(store);
+    return { currency: balance.currency, todaySpend: round2(entry.dailySpend[localDayKey(now)] ?? 0) };
+  } finally {
+    await release();
   }
-  // Increases are top-ups/refunds, not consumption. Updating the baseline here
-  // prevents the next observation from counting the top-up as negative spend.
-  entry.lastPaid = balance.paid;
-  prune(entry, now);
-  store.accounts[key] = entry;
-  writeStore(store);
-  return { currency: balance.currency, todaySpend: round2(entry.dailySpend[localDayKey(now)] ?? 0) };
 }
 
 export function readDeepSeekTodaySpend(apiKey?: string, now = Date.now()): { currency: string; todaySpend: number } {

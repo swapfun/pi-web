@@ -6,6 +6,28 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# The repository is also used by the personalized 30142 development service.
+# Never replace its dependencies or .next output while it is running.
+SERVICE_NAME="${PI_SWAP_WEB_SERVICE:-pi-swap-web-30142.service}"
+service_was_active=0
+update_succeeded=0
+
+restore_service() {
+  local status=$?
+  if (( service_was_active && update_succeeded )); then
+    if ! systemctl --user start "$SERVICE_NAME"; then
+      echo "警告：更新后无法重新启动 $SERVICE_NAME。" >&2
+    fi
+  elif (( service_was_active )); then
+    echo "更新未成功，暂不自动启动 $SERVICE_NAME；请先检查或回滚，再手动启动。" >&2
+  fi
+  if (( status != 0 )); then
+    echo "更新失败。保留当前状态；如需回滚，可使用备份标签（若已创建）。" >&2
+  fi
+  exit "$status"
+}
+trap restore_service EXIT
+
 branch="$(git branch --show-current)"
 if [[ "$branch" != "pi-swap-web" ]]; then
   echo "错误：请在 pi-swap-web 分支上运行此命令（当前：${branch:-分离 HEAD}）" >&2
@@ -33,6 +55,19 @@ base="$(git merge-base HEAD upstream/main)"
 if [[ "$base" == "$upstream_head" ]]; then
   echo "上游没有新提交。"
   exit 0
+fi
+
+backup_tag="backup-before-upstream-$(date +%Y%m%d-%H%M%S)"
+while git rev-parse --verify --quiet "refs/tags/$backup_tag" >/dev/null; do
+  backup_tag="${backup_tag}-1"
+done
+git tag "$backup_tag" "$before"
+echo "已创建回滚标签：$backup_tag"
+
+if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+  service_was_active=1
+  echo "正在停止 $SERVICE_NAME，避免更新期间读取半成品……"
+  systemctl --user stop "$SERVICE_NAME"
 fi
 
 echo "正在把本地定制 rebase 到 upstream/main……"
@@ -73,7 +108,10 @@ fi
 
 echo "正在同步依赖并重新构建……"
 npm ci --ignore-scripts
-npm run build
+# The pi shell may export TURBOPACK=1; the package script explicitly selects
+# webpack, so remove the conflicting inherited flag for a deterministic build.
+env -u TURBOPACK npm run build
+update_succeeded=1
 
 after="$(git rev-parse HEAD)"
 if [[ "$before" == "$after" ]]; then

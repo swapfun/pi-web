@@ -103,7 +103,7 @@ export async function queryProviderUsage(providerId: ProviderUsageId): Promise<P
         ?? resolved.auth.headers?.authorization
         ?? resolved.auth.headers?.Authorization
         ?? undefined;
-      const spend = recordDeepSeekBalance(payload, deepSeekCredential, capturedAt);
+      const spend = await recordDeepSeekBalance(payload, deepSeekCredential, capturedAt);
       if (spend) {
         report.metrics.push({ id: "today", label: "Usage today", value: spend.todaySpend, unit: "currency", currency: spend.currency });
       }
