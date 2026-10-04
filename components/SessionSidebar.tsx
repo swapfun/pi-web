@@ -2596,6 +2596,7 @@ function SessionItem({
         cursor: confirmDelete || renaming ? "default" : "pointer",
         background: confirmDelete
           ? "rgba(239,68,68,0.06)"
+          : titleUnread ? "rgba(34,197,94,0.10)"
           : isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
         borderLeft: confirmDelete
           ? "2px solid #ef4444"
@@ -2698,13 +2699,6 @@ function SessionItem({
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                 {title}
               </span>
-              {titleUnread && (
-                <span
-                  title={t("sidebar.newSessionActivity")}
-                  aria-label={t("sidebar.newSessionActivity")}
-                  style={{ width: 8, height: 8, flex: "0 0 auto", borderRadius: "50%", background: "#a855f7", boxShadow: "0 0 0 2px color-mix(in srgb, #a855f7 18%, transparent)" }}
-                />
-              )}
             </div>
             <div style={{ marginTop: 2, display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
               {isRunning ? (
