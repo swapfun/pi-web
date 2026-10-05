@@ -54,6 +54,13 @@ test("workspace restoration remains inside the cross-project branch", () => {
   );
 });
 
+test("a mounted session wins over a stale project ref during a workspace switch", () => {
+  assert.match(
+    callbackBody("handleCwdChange", "handleSelectSession"),
+    /const currentProject = selectedSession\s+\? workspaceKeyOf\(selectedSession\)\s+: activeProjectKeyRef\.current/,
+  );
+});
+
 test("New restores the draft after session navigation and workspace auto-restore", async (t) => {
   const callbacks = [
     callbackBody("restoreWorkspaceContext", "handleCwdChange"),

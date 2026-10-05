@@ -680,8 +680,14 @@ export function AppShell() {
     // Skip if cwd is null (initial mount).
     if (!cwd) return;
     const newProject = projectKey ?? projectRoot ?? cwd;
-    const currentProject = activeProjectKeyRef.current
-      ?? (selectedSession ? workspaceKeyOf(selectedSession) : null);
+    // The mounted session is the authoritative project identity. The ref is
+    // only a fallback for a fresh composer; it can briefly contain the target
+    // workspace while React is still clearing a session from the previous one.
+    // Letting the ref win here can make the sidebar show project B while the
+    // chat remains mounted on project A, and a later click on B is then a no-op.
+    const currentProject = selectedSession
+      ? workspaceKeyOf(selectedSession)
+      : activeProjectKeyRef.current ?? null;
     activeProjectKeyRef.current = newProject;
 
     // Keep the project identity in sync during the initial URL restore without

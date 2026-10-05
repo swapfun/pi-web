@@ -909,20 +909,27 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     if (validatedProject?.cwd === cwd) {
       return projectSelection(validatedProject.root, validatedProject.key);
     }
-    if (worktreeState && worktreeState.forCwd === cwd) {
-      return projectSelection(worktreeState.projectRoot, worktreeState.projectKey);
-    }
-    // Any path in the loaded worktree list belongs to that project — covers
-    // worktrees without sessions, so switching to them keeps the row mounted.
-    if (worktreeState?.worktrees.some((w) => w.path === cwd)) {
-      return projectSelection(worktreeState.projectRoot, worktreeState.projectKey);
-    }
+    // Prefer the session catalogue for an exact project-root selection. A
+    // worktree list fetched for a repo subdirectory can still contain the
+    // repository's main checkout, while its projectRoot intentionally remains
+    // that subdirectory. Using that stale list first misidentifies the main
+    // project (the one showing the "main" branch) as the old subdirectory.
     const match = allSessions.find((session) => (
       session.cwd === cwd || (session.projectRoot ?? session.cwd) === cwd
     ));
-    return match
-      ? projectSelection(match.projectRoot ?? match.cwd, workspaceKeyOf(match))
-      : projectSelection(cwd, cwd);
+    if (match) {
+      return projectSelection(match.projectRoot ?? match.cwd, workspaceKeyOf(match));
+    }
+    if (worktreeState && worktreeState.forCwd === cwd) {
+      return projectSelection(worktreeState.projectRoot, worktreeState.projectKey);
+    }
+    // Only trust paths from a top-level worktree response. A response loaded
+    // for a repo subdirectory lists the same git worktrees but has a different
+    // project identity, so it must not classify those paths for us.
+    if (worktreeState?.isTopLevel && worktreeState.worktrees.some((w) => w.path === cwd)) {
+      return projectSelection(worktreeState.projectRoot, worktreeState.projectKey);
+    }
+    return projectSelection(cwd, cwd);
   }, [validatedProject, worktreeState, allSessions, projectSelection]);
 
   // A worktree/session refresh can hydrate the stable key without changing
