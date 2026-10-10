@@ -53,6 +53,7 @@ const EMPTY_PROFILE: EditableProfile = {
   tools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
   loadSkills: false,
   loadExtensions: false,
+  codemode: "off",
   promptMode: "append",
   inheritContext: false,
   runInBackground: false,
@@ -86,7 +87,10 @@ function editableProfile(profile: SubagentProfile): EditableProfile {
     systemPrompt: profile.systemPrompt,
     tools: [...profile.tools],
     loadSkills: profile.loadSkills,
+    ...(profile.skills !== undefined ? { skills: [...profile.skills] } : {}),
     loadExtensions: profile.loadExtensions,
+    codemode: profile.codemode ?? "off",
+    ...(profile.extensions !== undefined ? { extensions: [...profile.extensions] } : {}),
     promptMode: profile.promptMode,
     ...(profile.model ? { model: profile.model } : {}),
     ...(profile.thinking ? { thinking: profile.thinking } : {}),
@@ -610,6 +614,40 @@ export function AgentsConfig({
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 20px" }}>
                       <Toggle label={t("agents.loadSkills")} disabled={disabled} checked={draft.loadSkills} onChange={(checked) => update("loadSkills", checked)} />
                       <Toggle label={t("agents.loadExtensions")} disabled={disabled} checked={draft.loadExtensions} onChange={(checked) => update("loadExtensions", checked)} />
+                    </div>
+                    {/* `skills:` and `extensions:` lists are edited in the profile file; show what they load. */}
+                    {draft.loadSkills && draft.skills !== undefined && (
+                      <span style={{ color: "var(--text-dim)", fontSize: 11, lineHeight: 1.4, overflowWrap: "anywhere" }}>
+                        {draft.skills.length > 0
+                          ? t("agents.skillsOnly", { skills: draft.skills.join(", ") })
+                          : t("agents.skillsNone")}
+                      </span>
+                    )}
+                    {draft.loadExtensions && draft.extensions !== undefined && (
+                      <span style={{ color: "var(--text-dim)", fontSize: 11, lineHeight: 1.4, overflowWrap: "anywhere" }}>
+                        {draft.extensions.length > 0
+                          ? t("agents.extensionsOnly", { extensions: draft.extensions.join(", ") })
+                          : t("agents.extensionsNone")}
+                      </span>
+                    )}
+                  </Field>
+
+                  <Field label={t("agents.codemode")}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <select
+                        aria-label={t("agents.codemode")}
+                        value={draft.codemode ?? "off"}
+                        disabled={disabled}
+                        onChange={(event) => update("codemode", event.target.value as EditableProfile["codemode"])}
+                        style={{ ...controlStyle, width: "auto", minWidth: 180, alignSelf: "flex-start" }}
+                      >
+                        <option value="inherit">{t("agents.codemode.inherit")}</option>
+                        <option value="on">{t("agents.codemode.on")}</option>
+                        <option value="off">{t("agents.codemode.off")}</option>
+                      </select>
+                      <span style={{ color: "var(--text-dim)", fontSize: 11, lineHeight: 1.4 }}>
+                        {t("agents.codemodeHint")}
+                      </span>
                     </div>
                   </Field>
 

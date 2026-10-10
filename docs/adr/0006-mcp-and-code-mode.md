@@ -67,7 +67,10 @@ Normal sessions add the three factories to `extensionFactories` as
 `builtin:<name>` paths, so the shared `-builtin:<name>` setting, project
 `+`/`-`/`!` overrides, `noExtensions`, and replacement by a third-party
 extension that registers `/mcp`, `codemode`, or `tool_search` all behave as in
-the CLI. Chat-only and subagent sessions do not load them.
+the CLI. Chat-only sessions do not load them. Subagent profiles can now select
+`codemode: inherit | on | off` (missing means `off`): they load only the Code mode factory, retain their
+profile tool allow-list, and save the resolved choice in their resource snapshot.
+They still do not load the normal session's MCP host or tool-search.
 
 ### Pi Web decides which MCP servers a session connects
 
@@ -149,6 +152,12 @@ pane with Sign in, Test, Remove, a switch, and the server's exposure, and an
   is keyed for its status, as `codemode`, and is no longer offered. The manager re-registers the tools in place; Pi
   Web can only register the changed entry again, so open sessions reconnect
   the server at their next message. Per-tool exposure stays in P3.
+- **A global server can be turned on or off for one project**, as pi 1.0.1's
+  `/mcp` does: an override in the project's `.pi/mcp.json`, an entry without
+  `command`, `url` or `type` that may set only `enabled`, `exposure` and
+  `toolExposure`. The panel lists it in the Project group as the global server
+  with those changes, which is what the project's sessions connect, and its
+  switch, exposure and Remove edit the override.
 
 - `GET /api/mcp` reads files only. It never spawns a process, opens a network
   connection, or runs a `!command` value. The two obvious sources of its

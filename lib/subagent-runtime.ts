@@ -20,11 +20,12 @@ import {
 import {
   readSubagentRun,
   resolveSubagentProfile,
-  SUBAGENT_CONTROL_TOOL_NAMES,
   SUBAGENT_META_TYPE,
   SUBAGENT_STATUS_TYPE,
   SUBAGENT_RESULT_TYPE,
   selectSubagentExtensionTools,
+  subagentExtensionLoaderOptions,
+  subagentToolOptions,
   withSubagentExtensionTools,
   type SubagentMetadata,
   type SubagentResultMetadata,
@@ -32,9 +33,10 @@ import {
 } from "./subagents";
 import type { SessionEntry } from "./types";
 import { buildSubagentPromptPlan } from "./subagent-prompt";
-import { createExactSystemPromptExtension } from "./exact-system-prompt";
+import { createSubagentSkillsBinding } from "./subagent-skills";
 import { appendSubagentInputFiles, loadSubagentInputFiles } from "./subagent-input";
 import { projectTrustReloadOptions } from "./project-trust";
+import { createSubagentCodemodeExtension } from "./builtin-extensions";
 import { resolveShellTools } from "./powershell-settings";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { SubagentQueue } from "./subagent-queue";
@@ -54,7 +56,7 @@ export interface SubagentRuntimeDependencies {
   getSession(sessionId: string): HostSession | undefined;
   registerSession(
     inner: AgentSessionLike,
-    options?: { exactSystemPrompt?: string; chatOnly?: boolean },
+    options?: { exactSystemPrompt?: () => string; chatOnly?: boolean },
   ): void;
   reopenSession(sessionId: string, sessionFile: string): Promise<HostSession>;
   resolveSessionPath(sessionId: string): Promise<string | null>;
@@ -73,6 +75,8 @@ type StoredSubagentExecution = {
   run: SubagentRunInfo;
   completion: Promise<SubagentRunInfo>;
   abortRequested: boolean;
+  /** Set once the turn limit ends the run; later steering is refused instead of starting another turn. */
+  turnLimitReached?: boolean;
   cancelQueued?: () => boolean;
 };
 
@@ -85,17 +89,29 @@ const SUBAGENT_CONTEXT_LIMIT = 50_000;
 const PARENT_IDLE_POLL_MS = 200;
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-/** pi's agent loop records provider failures as an assistant message with `stopReason: "error"` and resolves `prompt()` normally; surface that as a failed run. */
-function lastAssistantError(sessionManager: { getEntries?: () => unknown }): string | undefined {
+const TURN_LIMIT_INSTRUCTION = "You have reached your turn limit. Wrap up immediately and provide your final answer now.";
+
+/**
+ * How the last model request ended when `prompt()` resolved anyway: pi records a provider
+ * failure, or a request stopped from the child's own chat, on the assistant message.
+ */
+function lastAssistantStop(sessionManager: { getEntries?: () => unknown }): { aborted?: true; error?: string } | undefined {
   const entries = sessionManager.getEntries?.();
   if (!Array.isArray(entries)) return undefined;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i] as { type?: unknown; message?: { role?: unknown; stopReason?: unknown; errorMessage?: unknown } };
     if (entry?.type !== "message" || entry.message?.role !== "assistant") continue;
+    if (entry.message.stopReason === "aborted") return { aborted: true };
     if (entry.message.stopReason !== "error") return undefined;
-    return typeof entry.message.errorMessage === "string" && entry.message.errorMessage ? entry.message.errorMessage : "Provider returned an error";
+    return { error: typeof entry.message.errorMessage === "string" && entry.message.errorMessage ? entry.message.errorMessage : "Provider returned an error" };
   }
   return undefined;
+}
+
+function turnLimitError(turnLimit: number, undelivered: readonly string[]): string {
+  const error = `Subagent reached its turn limit (${turnLimit}) without completing the task.`;
+  if (undelivered.length === 0) return error;
+  return `${error} These queued messages were not delivered:\n${undelivered.map((text) => `- ${text}`).join("\n")}`;
 }
 
 function getSubagentRuns(): Map<string, StoredSubagentExecution> {
@@ -210,13 +226,10 @@ export function createSubagentController(
         isolatedWorktree = await addWorktree(parent.cwd, `pi-web-agent-${randomUUID()}`);
       }
       const childCwd = isolatedWorktree?.path ?? parent.cwd;
-      const inheritContext = request.inheritContext ?? profile.inheritContext;
-      const maxTurns = request.maxTurns ?? profile.maxTurns;
-      if (maxTurns !== undefined && (!Number.isFinite(maxTurns) || maxTurns < 0)) {
-        throw new Error("max_turns must be a non-negative number");
-      }
-      const turnLimit = maxTurns && maxTurns > 0 ? Math.floor(maxTurns) : undefined;
-      const thinking = request.thinking ?? profile.thinking ?? parent.inner.agent.state?.thinkingLevel;
+      const inheritContext = profile.inheritContext;
+      // `parseProfileFile` already floors a positive profile `max_turns`, so it is an integer or absent.
+      const turnLimit = profile.maxTurns;
+      const thinking = profile.thinking ?? parent.inner.agent.state?.thinkingLevel;
       if (thinking && !THINKING_LEVELS.has(thinking as ThinkingLevel)) {
         throw new Error(`Invalid subagent thinking level: ${thinking}`);
       }
@@ -237,7 +250,33 @@ export function createSubagentController(
         task: appendSubagentInputFiles(request.task, inputFiles),
         inheritedParentContext,
       });
-      const { chatOnly, appendSystemPrompt, delegatedTask } = promptPlan;
+      const parentCodemodeEnabled = parent.inner.getActiveToolNames().includes("codemode");
+      const wantsCodemode = profile.codemode === "on"
+        || (profile.codemode === "inherit" && parentCodemodeEnabled);
+      if (promptPlan.chatOnly && profile.codemode === "on") {
+        throw new Error("Code mode cannot be enabled for a chat-only subagent profile");
+      }
+      // A chat-only profile remains chat-only when inheritance is selected. An explicit `on`
+      // is rejected above so it cannot silently grant a script capability to tools:none.
+      const codemodeEnabled = !promptPlan.chatOnly && wantsCodemode;
+      const chatOnly = promptPlan.chatOnly;
+      const { appendSystemPrompt, delegatedTask } = promptPlan;
+      const skillsBinding = createSubagentSkillsBinding({
+        loadSkills: profile.loadSkills,
+        skills: profile.skills,
+        exactSystemPrompt: promptPlan.exactSystemPrompt,
+      });
+      const codemodeExtension = codemodeEnabled
+        ? await createSubagentCodemodeExtension({
+            agentDir,
+            cwd: childCwd,
+            projectTrusted: () => settingsManager.isProjectTrusted(),
+          })
+        : undefined;
+      const extensionFactories = [
+        ...(codemodeExtension ? [codemodeExtension] : []),
+        ...(skillsBinding.loaderOptions.extensionFactories ?? []),
+      ];
       if (!chatOnly) initTheme();
       const services = await createAgentSessionServices({
         cwd: childCwd,
@@ -245,8 +284,9 @@ export function createSubagentController(
         modelRuntime: parentModelRuntime,
         settingsManager,
         resourceLoaderOptions: {
-          noExtensions: !profile.loadExtensions,
-          noSkills: !profile.loadSkills,
+          ...subagentExtensionLoaderOptions(profile),
+          ...skillsBinding.loaderOptions,
+          ...(extensionFactories.length > 0 ? { extensionFactories } : {}),
           noPromptTemplates: true,
           noThemes: true,
           noContextFiles: true,
@@ -257,18 +297,20 @@ export function createSubagentController(
               }
             : {}),
           appendSystemPrompt,
-          // The exact prompt is sent through before_agent_start; see lib/exact-system-prompt.ts.
-          ...(promptPlan.exactSystemPrompt !== undefined
-            ? { extensionFactories: [createExactSystemPromptExtension(() => promptPlan.exactSystemPrompt)] }
-            : {}),
         },
-        ...((profile.loadExtensions || profile.loadSkills)
+        ...((profile.loadExtensions || profile.loadSkills || codemodeEnabled)
           ? { resourceLoaderReloadOptions: projectTrustReloadOptions(childCwd, agentDir) }
           : {}),
       });
 
+      if (codemodeEnabled && !services.resourceLoader.getExtensions().extensions.some((extension) => extension.tools.has("codemode"))) {
+        throw new Error("Code mode is unavailable: builtin:codemode was not registered");
+      }
+
+      // `ext:` selectors that `disallowed_tools` cancels out leave an empty list, which admits none.
+      const allExtensionTools = profile.loadExtensions && profile.extensionTools === undefined;
       const extensionToolNames = profile.loadExtensions
-        ? profile.extensionTools?.length
+        ? profile.extensionTools !== undefined
           ? selectSubagentExtensionTools(
             services.resourceLoader.getExtensions().extensions,
             profile.extensionTools,
@@ -280,6 +322,7 @@ export function createSubagentController(
         withSubagentExtensionTools(profile.tools, extensionToolNames),
         settingsManager.getDefaultTools(),
       );
+      if (codemodeEnabled && !activeTools.includes("codemode")) activeTools.push("codemode");
 
       const sessionManager = isolatedWorktree
         ? SessionManager.create(childCwd, undefined, { parentSession: parent.sessionFile })
@@ -299,9 +342,13 @@ export function createSubagentController(
           version: 1,
           appendSystemPrompt: [...appendSystemPrompt],
           tools: [...activeTools],
+          ...(codemodeEnabled ? { codemode: true as const } : {}),
           loadSkills: profile.loadSkills,
-        loadExtensions: profile.loadExtensions,
-        ...(promptPlan.exactSystemPrompt !== undefined ? { exactSystemPrompt: promptPlan.exactSystemPrompt } : {}),
+          ...(profile.skills !== undefined ? { skills: [...profile.skills] } : {}),
+          loadExtensions: profile.loadExtensions,
+          ...(allExtensionTools ? { allExtensionTools: true } : {}),
+          ...(profile.extensions !== undefined ? { extensions: [...profile.extensions] } : {}),
+          ...(promptPlan.exactSystemPrompt !== undefined ? { exactSystemPrompt: promptPlan.exactSystemPrompt } : {}),
         },
         ...(isolatedWorktree ? { worktreePath: isolatedWorktree.path, worktreeBranch: isolatedWorktree.branch } : {}),
       };
@@ -315,12 +362,12 @@ export function createSubagentController(
         sessionManager,
         model: requestedModel ?? parentModel,
         ...(thinking ? { thinkingLevel: thinking as ThinkingLevel } : {}),
-        tools: activeTools,
-        excludeTools: [...SUBAGENT_CONTROL_TOOL_NAMES],
+        ...subagentToolOptions({ tools: activeTools, allExtensionTools }),
       });
+      skillsBinding.setActiveToolsGetter(() => inner.getActiveToolNames());
       dependencies.registerSession(inner, {
-        ...(promptPlan.exactSystemPrompt !== undefined
-          ? { exactSystemPrompt: promptPlan.exactSystemPrompt }
+        ...(skillsBinding.getExactSystemPrompt !== undefined
+          ? { exactSystemPrompt: skillsBinding.getExactSystemPrompt }
           : {}),
         chatOnly,
       });
@@ -339,22 +386,6 @@ export function createSubagentController(
         ...(isolatedWorktree ? { worktreePath: isolatedWorktree.path, worktreeBranch: isolatedWorktree.branch } : {}),
       };
 
-      let turnCount = 0;
-      let maxTurnsReached = false;
-      let softLimitReached = false;
-      const unsubscribeTurns = turnLimit
-        ? inner.subscribe((event) => {
-            if (event.type !== "turn_end") return;
-            turnCount += 1;
-            if (!softLimitReached && turnCount >= turnLimit) {
-              softLimitReached = true;
-              void inner.steer("You have reached your turn limit. Wrap up immediately and provide your final answer now.");
-            } else if (softLimitReached && turnCount >= turnLimit + 1) {
-              maxTurnsReached = true;
-              void inner.abort();
-            }
-          })
-        : () => {};
       let resolveCompletion!: (run: SubagentRunInfo) => void;
       const completion = new Promise<SubagentRunInfo>((resolve) => { resolveCompletion = resolve; });
       const stored: StoredSubagentExecution = {
@@ -388,33 +419,79 @@ export function createSubagentController(
         sessionManager.appendCustomEntry(SUBAGENT_STATUS_TYPE, { version: 1, status: "running" });
         request.onUpdate?.(stored.run);
         dependencies.invalidateSessionList();
+        let turnCount = 0;
+        let maxTurnsReached = false;
+        let undelivered: string[] = [];
+        const previousFinishTurn = inner.agent.finishTurn;
+        const previousSteeringMode = inner.agent.steeringMode;
+        let unsubscribeTools: (() => void) | undefined;
+        if (turnLimit) {
+          // Finalized events retain the SDK's terminate hint; tool-result messages do not.
+          const terminatingTools = new Set<string>();
+          unsubscribeTools = inner.subscribe((event) => {
+            if (event.type === "tool_execution_end" && event.result?.terminate === true) {
+              terminatingTools.add(event.toolCallId);
+            }
+          });
+          inner.agent.finishTurn = async (turn, signal) => {
+            const decision = (await previousFinishTurn?.(turn, signal)) ?? undefined;
+            const toolsContinue = turn.toolResults.some((message) => !terminatingTools.has(message.toolCallId));
+            terminatingTools.clear();
+            turnCount += 1;
+            if (signal?.aborted || decision?.action === "end" ||
+              turn.message.stopReason === "error" || turn.message.stopReason === "aborted") return decision;
+            const needsAnotherTurn = toolsContinue || decision?.action === "continue" || inner.agent.hasQueuedMessages();
+            if (!needsAnotherTurn || turnCount < turnLimit) return decision;
+            if (turnCount >= turnLimit + 1) {
+              maxTurnsReached = true;
+              stored.turnLimitReached = true;
+              // AgentSession starts another run for anything still queued, past an `end`
+              // decision, so the limit holds only once the queues are empty.
+              const { steering, followUp } = inner.clearQueue();
+              undelivered = [...undelivered, ...steering, ...followUp];
+              return { action: "end" };
+            }
+            // The awaited SDK boundary delivers the instruction before the wrap-up request.
+            // In one-at-a-time mode a steer queued earlier would take the wrap-up turn and
+            // leave the instruction for later, so that turn takes everything queued.
+            inner.agent.steeringMode = "all";
+            await inner.steer(TURN_LIMIT_INSTRUCTION);
+            return decision;
+          };
+        }
         let result: SubagentRunInfo;
         try {
           await inner.prompt(delegatedTask, { source: "rpc" });
           const text = inner.getLastAssistantText()?.trim();
-          const aborted = stored.abortRequested && !maxTurnsReached;
-          const providerError = aborted ? undefined : lastAssistantError(sessionManager);
+          const stop = stored.abortRequested ? undefined : lastAssistantStop(sessionManager);
+          const aborted = stored.abortRequested || stop?.aborted === true;
+          const errorMessage = aborted ? undefined : stop?.error ??
+            (maxTurnsReached && turnLimit ? turnLimitError(turnLimit, undelivered) : undefined);
           result = {
             ...initialRun,
-            status: aborted ? "aborted" : providerError ? "failed" : "completed",
+            status: aborted ? "aborted" : errorMessage ? "failed" : "completed",
             completedAt: new Date().toISOString(),
             ...(text ? { result: text } : {}),
-            ...(providerError ? { error: providerError } : {}),
+            ...(errorMessage ? { error: errorMessage } : {}),
           };
         } catch (error) {
           const text = inner.getLastAssistantText()?.trim();
           const aborted = stored.abortRequested || request.signal?.aborted;
           result = {
             ...initialRun,
-            status: aborted ? "aborted" : maxTurnsReached ? "completed" : "failed",
+            status: aborted ? "aborted" : "failed",
             completedAt: new Date().toISOString(),
             ...(text ? { result: text } : {}),
-            ...(!aborted && !maxTurnsReached
+            ...(!aborted
               ? { error: error instanceof Error ? error.message : String(error) }
               : {}),
           };
         } finally {
-          unsubscribeTurns();
+          if (turnLimit) {
+            inner.agent.finishTurn = previousFinishTurn;
+            inner.agent.steeringMode = previousSteeringMode;
+          }
+          unsubscribeTools?.();
           request.signal?.removeEventListener("abort", handleParentAbort);
         }
 
@@ -536,10 +613,12 @@ export function createSubagentController(
       try {
         await wrapper!.inner.prompt(request.task, { source: "rpc" });
         const text = wrapper!.inner.getLastAssistantText()?.trim();
-        const providerError = stored.abortRequested ? undefined : lastAssistantError(manager);
+        const stop = stored.abortRequested ? undefined : lastAssistantStop(manager);
+        const aborted = stored.abortRequested || stop?.aborted === true;
+        const providerError = aborted ? undefined : stop?.error;
         result = {
           ...initialRun,
-          status: stored.abortRequested ? "aborted" : providerError ? "failed" : "completed",
+          status: aborted ? "aborted" : providerError ? "failed" : "completed",
           completedAt: new Date().toISOString(),
           ...(text ? { result: text } : {}),
           ...(providerError ? { error: providerError } : {}),
@@ -611,6 +690,7 @@ export function createSubagentController(
   async function steer(sessionId: string, message: string): Promise<void> {
     const wrapper = dependencies.getSession(sessionId);
     if (!wrapper?.isAlive() || !wrapper.isRunning()) throw new Error("Subagent is not running");
+    if (getSubagentRuns().get(sessionId)?.turnLimitReached) throw new Error("Subagent reached its turn limit and is stopping; resume it to continue");
     if (!message.trim()) throw new Error("Steering message is required");
     await wrapper.inner.steer(message.trim());
   }

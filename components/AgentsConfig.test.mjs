@@ -2,10 +2,57 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import ts from "typescript";
+import vm from "node:vm";
+
 const source = await readFile(new URL("./AgentsConfig.tsx", import.meta.url), "utf8");
 const cssSource = await readFile(new URL("../app/settings.css", import.meta.url), "utf8");
 const chatInputSource = await readFile(new URL("./ChatInput.tsx", import.meta.url), "utf8");
 const modelSelectorSource = await readFile(new URL("./ModelSelector.tsx", import.meta.url), "utf8");
+
+test("editor draft preserves named and empty selections independently of activation", () => {
+  const declaration = source.slice(source.indexOf("function editableProfile("), source.indexOf("function profileKey("));
+  const code = ts.transpileModule(declaration, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
+  const editable = vm.runInNewContext(`${code}; editableProfile`);
+  for (const skills of [["review", "audit"], []]) {
+    const draft = editable({ name: "reviewer", tools: [], loadSkills: false, skills });
+    assert.equal(draft.loadSkills, false);
+    assert.deepEqual(Array.from(draft.skills ?? ["LOST"]), skills);
+    draft.skills.push("new");
+    assert.notEqual(draft.skills.length, skills.length);
+  }
+  for (const extensions of [["codegraph"], []]) {
+    const draft = editable({ name: "reviewer", tools: [], loadExtensions: true, extensions });
+    assert.deepEqual(Array.from(draft.extensions ?? ["LOST"]), extensions);
+  }
+});
+
+test("draft backfills code mode for legacy profiles and keeps an explicit choice", () => {
+  const declaration = source.slice(source.indexOf("function editableProfile("), source.indexOf("function profileKey("));
+  const code = ts.transpileModule(declaration, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
+  const editable = vm.runInNewContext(`${code}; editableProfile`);
+  // Profiles written before the setting existed have no value: code mode stays disabled.
+  assert.equal(editable({ name: "legacy", tools: [], loadSkills: false, loadExtensions: false }).codemode, "off");
+  // An explicit choice survives the draft, so duplicating a profile keeps it too.
+  for (const codemode of ["on", "off", "inherit"]) {
+    const draft = editable({ name: "reviewer", tools: [], loadSkills: false, loadExtensions: false, codemode });
+    assert.equal(draft.codemode, codemode);
+  }
+});
+
+test("shows code mode as its own field with a plain-language hint", async () => {
+  assert.match(source, /<Field label=\{t\("agents\.codemode"\)\}>/);
+  assert.match(source, /<select\s+aria-label=\{t\("agents\.codemode"\)\}\s+value=\{draft\.codemode \?\? "off"\}[\s\S]*?<option value="inherit">[\s\S]*?<option value="on">[\s\S]*?<option value="off">/);
+  assert.match(source, /\{t\("agents\.codemodeHint"\)\}/);
+  assert.match(source, /codemode: "off",/);
+  for (const locale of ["en", "zh-CN", "zh-TW"]) {
+    const text = await readFile(new URL(`../lib/i18n/messages/${locale}.ts`, import.meta.url), "utf8");
+    assert.match(text, /"agents\.codemodeHint": "/);
+    assert.match(text, /"agents\.codemode\.inherit": "/);
+    assert.match(text, /"agents\.codemode\.on": "/);
+    assert.match(text, /"agents\.codemode\.off": "/);
+  }
+});
 
 test("keeps same-name profiles selectable by scope and groups writable sources first", () => {
   assert.match(source, /return `\$\{profile\.scope\}:\$\{profile\.name\}`/);
@@ -92,7 +139,7 @@ test("reuses the ChatInput model selector with scoped models", () => {
   assert.match(chatInputSource, /import \{ ModelSelector, type ModelSelectorOption \} from "\.\/ModelSelector"/);
   assert.match(source, /<ModelSelector[\s\S]*?options=\{modelSelectorOptions\}[\s\S]*?variant="field"/);
   assert.match(chatInputSource, /<ModelSelector[\s\S]*?options=\{modelOptions\}/);
-  assert.match(modelSelectorSource, /filterModelOptions\(sortedOptions, filter\)/);
+  assert.match(modelSelectorSource, /filterModelOptions\(options, filter\)/);
   assert.match(modelSelectorSource, /modelsByProvider\.map/);
   assert.match(modelSelectorSource, /event\.key !== "Escape" \|\| !open[\s\S]*?event\.preventDefault\(\)[\s\S]*?event\.stopPropagation\(\)/);
   assert.match(source, /agents\.modelUnavailable/);
@@ -116,7 +163,30 @@ test("uses the same form controls for editable and readonly profiles", () => {
   assert.match(source, /<Toggle label=\{t\("agents\.background"\)\} disabled=\{disabled\}/);
   assert.match(source, /<Toggle label=\{t\("agents\.loadSkills"\)\} disabled=\{disabled\}/);
   assert.match(source, /<Toggle label=\{t\("agents\.loadExtensions"\)\} disabled=\{disabled\}/);
+  assert.match(source, /<select\s+aria-label=\{t\("agents\.codemode"\)\}[\s\S]*?disabled=\{disabled\}/);
   assert.doesNotMatch(source, /ReadonlyValue|readonlyPromptStyle|agents-readonly/);
+});
+
+test("shows a profile file's skills and extensions lists read-only under the switches", async () => {
+  const messages = {};
+  for (const locale of ["en", "zh-CN", "zh-TW"]) {
+    messages[locale] = await readFile(new URL(`../lib/i18n/messages/${locale}.ts`, import.meta.url), "utf8");
+  }
+  assert.match(source, /\{draft\.loadSkills && draft\.skills !== undefined && \(/);
+  assert.match(source, /t\("agents\.skillsOnly", \{ skills: draft\.skills\.join\(", "\) \}\)/);
+  assert.match(source, /: t\("agents\.skillsNone"\)/);
+  assert.match(source, /\{draft\.loadExtensions && draft\.extensions !== undefined && \(/);
+  assert.match(source, /t\("agents\.extensionsOnly", \{ extensions: draft\.extensions\.join\(", "\) \}\)/);
+  assert.match(source, /: t\("agents\.extensionsNone"\)/);
+  for (const text of Object.values(messages)) {
+    assert.match(text, /"agents\.skillsOnly": "[^"]*\{skills\}[^"]*"/);
+    assert.match(text, /"agents\.skillsNone": "/);
+    assert.match(text, /"agents\.extensionsOnly": "[^"]*\{extensions\}[^"]*"/);
+    assert.match(text, /"agents\.extensionsNone": "/);
+  }
+  // The two lines sit side by side, so each names what it lists.
+  assert.match(messages["zh-CN"], /"agents\.skillsOnly": "只加载这些技能：\{skills\}"/);
+  assert.match(messages["zh-CN"], /"agents\.extensionsOnly": "只加载这些扩展：\{extensions\}"/);
 });
 
 test("shows disabled controls with a gray background", () => {

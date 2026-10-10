@@ -49,8 +49,9 @@ test("keeps the session event stream open through the idle grace window", () => 
   assert.doesNotMatch(agentEndSource, /closeEvents\(\)/);
   assert.match(agentStartSource, /cancelEventStreamGrace\(\)/);
   assert.match(agentSettledSource, /scheduleEventStreamClose\(sid\)/);
-  assert.match(agentSettledSource, /onAgentEnd\?\.\(\)/);
-  assert.match(promptDoneSource, /notifyPromptStage\(runId\)/);
+  // A stopped run ends quietly: the event says so (pi 1.1's agent_settled.aborted, carried on prompt_done).
+  assert.match(agentSettledSource, /onAgentEnd\?\.\(\{ aborted: event\.aborted === true \}\)/);
+  assert.match(promptDoneSource, /notifyPromptStage\(runId, event\.aborted === true\)/);
   assert.match(promptDoneSource, /scheduleEventStreamClose\(sid\)/);
   assert.match(sendSource, /const definitivelyRejected = !promptRequestStarted/);
   assert.match(sendSource, /if \(!definitivelyRejected && sentSessionId\) \{[\s\S]*?waitForPromptSettlement/);
@@ -119,6 +120,19 @@ test("new-session promotion rekeys drafts before publishing the real session", (
   assert.match(chatWindowSource, /draftKey=\{session\?\.id \?\? newSessionDraftKey \?\? undefined\}/);
 });
 
+test("a refused new session reports the server's reason, not a bare status (#1061)", () => {
+  const ensureSource = source.slice(
+    source.indexOf("  const ensureNewSession = useCallback"),
+    source.indexOf("  const loadSystemInfo = useCallback"),
+  );
+
+  assert.match(
+    ensureSource,
+    /if \(!res\.ok\) \{[\s\S]*?await res\.json\(\)\.catch\(\(\) => null\)[\s\S]*?typeof body\?\.error === "string" \? body\.error : `HTTP \$\{res\.status\}`/,
+  );
+  assert.doesNotMatch(ensureSource, /if \(!res\.ok\) throw new Error\(`HTTP \$\{res\.status\}`\)/);
+});
+
 test("fresh sessions use the preference while persisted and live sessions restore their selection", () => {
   const preferenceSource = source.slice(
     source.indexOf("  const setToolPresetState"),
@@ -145,6 +159,19 @@ test("fresh sessions use the preference while persisted and live sessions restor
   assert.match(changeSource, /result\?\.recreated[\s\S]*?maintainEventsConnected\(activeSessionId\)/);
   assert.match(changeSource, /sessionIdRef\.current = activeSessionId/);
   assert.doesNotMatch(loadToolsSource, /setPreferredToolPreset/);
+});
+
+test("a fresh composer starts from carried model picks and reports its own", () => {
+  assert.match(source, /const initialChoices = isNew \? opts\.initialNewSessionChoices \?\? null : null;/);
+  assert.match(source, /useState<SelectedModel \| null>\(\(\) => initialChoices\?\.model \?\? null\)/);
+  assert.match(source, /useState<ConcreteThinkingLevel \| null>\(\(\) => initialChoices\?\.thinkingLevel \?\? null\)/);
+  // What ensureNewSession sends is the same carried pick, not just what the selector shows.
+  assert.match(source, /const newSessionModelOverrideRef = useRef<SelectedModel \| null>\(initialChoices\?\.model \?\? null\);/);
+  assert.match(source, /const thinkingLevelOverrideRef = useRef<ConcreteThinkingLevel \| null>\(initialChoices\?\.thinkingLevel \?\? null\);/);
+  assert.match(source, /useEffect\(\(\) => \{\s*if \(isNew\) onNewSessionChoicesChange\?\.\(\{ model: newSessionModel, thinkingLevel: newSessionThinkingLevel \}\);\s*\}, \[isNew, newSessionModel, newSessionThinkingLevel, onNewSessionChoicesChange\]\);/);
+  assert.match(chatWindowSource, /newSessionDraftKey, initialNewSessionChoices, onNewSessionChoicesChange, onAgentEnd: wrappedOnAgentEnd,/);
+  // The tool preset needs no carrying: every fresh composer starts from the stored pick.
+  assert.match(source, /setToolPresetState\(getPreferredToolPreset\(\)\)/);
 });
 
 test("sessions the user never overrode follow pi's configured defaultTools (#700)", () => {
@@ -302,7 +329,7 @@ test("stale fresh-session completion cannot replace the active composer", () => 
     cwdChangeSource,
     /currentProject === newProject\s*&& \(selectedSession !== null \|\| currentFreshCwd === cwd\)/,
   );
-  assert.match(cwdChangeSource, /if \(currentProject !== newProject\) \{[\s\S]*?setFileTabs\(\[\]\)/);
+  assert.match(cwdChangeSource, /if \(currentProject !== newProject\) \{[\s\S]*?changeFileWorkspace\(currentProject, newProject\)/);
   assert.match(
     appShellSource,
     /useLayoutEffect\(\(\) => \{\s*activeNewSessionDraftKeyRef\.current = newSessionDraftKey;/,
@@ -398,7 +425,8 @@ test("uses server pagination state instead of guessing from rendered rows", () =
   assert.match(loadContextSource, /setData\(\(prev\) => \{[\s\S]*messages: \[\.\.\.d\.context\.messages, \.\.\.prev\.context\.messages\]/);
   assert.match(chatWindowSource, /const oldestId = historyCursor/);
   assert.doesNotMatch(chatWindowSource, /const oldestId = entryIds\[0\]/);
-  assert.match(chatWindowSource, /if \(!hasEarlierMessages\) return/);
+  // Nothing older on the server: the sentinel only widens the window over loaded rows.
+  assert.match(chatWindowSource, /if \(!hasEarlierMessages\) \{[\s\S]*?setVisibleCount\(\(current\) => getNextVisibleCount\(current\)\);\s*return;\s*\}/);
   assert.match(chatWindowSource, /const hasMore = startIndex > 0 \|\| hasEarlierMessages/);
   assert.doesNotMatch(chatWindowSource, /rendered\.length >= visibleCount/);
 });
@@ -815,7 +843,7 @@ test("keeps the compaction control reachable while a turn is auto-compacting", (
   // the control behind `!isStreaming` left only the generic stop button, which aborts the
   // whole prompt instead of the compaction.
   const controlBlock = chatInputSource.slice(
-    chatInputSource.indexOf("onClick={isCompacting ? onAbortCompaction : onCompact}") - 200,
+    chatInputSource.indexOf("onClick={isCompacting ? onAbortCompaction : (e) => { if (!isStrayClick(e)) onCompact(); }}") - 200,
     chatInputSource.indexOf('aria-label={isCompacting ? t("chat.stopCompaction")'),
   );
 

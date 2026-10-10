@@ -21,8 +21,10 @@ import {
 import { encodeFilePathForApi, getFileDirectory, getFileName, getRelativeFilePath } from "@/lib/file-paths";
 import { parsePdfPageFragment, resolveLocalFileHref, shouldOpenLocalFileInApp } from "@/lib/file-links";
 import { parseFrontmatter } from "@/lib/frontmatter";
-import { markdownPreviewRehypePlugins, markdownPreviewRemarkPlugins, markdownUrlTransform, normalizeDisplayMath } from "@/lib/markdown";
+import { isExternalMarkdownHref, markdownAppUrlTransform, markdownPreviewRehypePlugins, markdownPreviewRemarkPlugins, markdownUrlTransform, normalizeDisplayMath } from "@/lib/markdown";
 import { CodeBlock, MermaidBlock } from "./MermaidBlock";
+import { DelimitedTable } from "./DelimitedTable";
+import { isDelimitedTablePath } from "@/lib/delimited-table";
 import { FrontmatterCard } from "./FrontmatterCard";
 import { parseUnifiedPatch } from "@/lib/patch";
 import type { GitFileDiffResponse } from "@/lib/git-types";
@@ -69,9 +71,23 @@ const DISPLAY_MODE_LABELS: Record<DisplayMode, string> = {
 
 const FILE_CODE_STYLE: CSSProperties = {
   fontFamily: "var(--font-mono)",
+  fontWeight: "var(--font-mono-weight)",
   fontSize: 13,
   lineHeight: 1.6,
 };
+
+// Prism's light theme colors <pre> with backgroundColor, its dark theme with
+// the background shorthand. The source view sets backgroundColor itself and the
+// dark theme's shorthand is dropped, as CodeBlock does: a theme switch then never
+// makes React remove one beside the other (it warned, and the view lost its
+// background).
+const fileViewerDarkTheme = {
+  ...vscDarkPlus,
+  'pre[class*="language-"]': {
+    ...vscDarkPlus['pre[class*="language-"]'],
+  },
+};
+delete fileViewerDarkTheme['pre[class*="language-"]'].background;
 
 const FILE_LINE_NUMBER_STYLE: CSSProperties = {
   width: 48,
@@ -82,6 +98,7 @@ const FILE_LINE_NUMBER_STYLE: CSSProperties = {
   background: "var(--bg-panel)",
   borderRight: "1px solid var(--border)",
   fontFamily: "var(--font-mono)",
+  fontWeight: "var(--font-mono-weight)",
   fontSize: 11,
   fontStyle: "normal",
   fontVariantNumeric: "tabular-nums",
@@ -1324,20 +1341,23 @@ function TextFileViewer({
     void fetchGitDiff(filePath);
   }, [fetchGitDiff, filePath, gitRefreshKey]);
 
+  const isDelimitedTable = isDelimitedTablePath(filePath);
+
   useEffect(() => {
     // HTML gets the same rendered-first treatment as markdown: a generated page
     // is usually more useful viewed than read as source. Both have a preview
     // mode already; the source tab stays one click away. A restored choice or
-    // explicit mode hint always wins over this default.
+    // explicit mode hint always wins over this default. A CSV/TSV file opens
+    // as its table, even while only its first chunk is loaded.
     if (
       defaultPreviewEligibleRef.current
-      && !data?.truncated
-      && (data?.language === "markdown" || data?.language === "html")
+      && data
+      && (isDelimitedTable || (!data.truncated && (data.language === "markdown" || data.language === "html")))
     ) {
       defaultPreviewEligibleRef.current = false;
       updateDisplayMode("preview");
     }
-  }, [data?.language, data?.truncated, updateDisplayMode]);
+  }, [data, isDelimitedTable, updateDisplayMode]);
 
   const hasGitDiff = gitDiff?.supported === true && typeof gitDiff.patch === "string";
   const isDeletedDiff = hasGitDiff && gitDiff.status === "deleted";
@@ -1370,7 +1390,8 @@ function TextFileViewer({
   const language = data?.language ?? "text";
   const isHtml = language === "html";
   const isMarkdown = language === "markdown";
-  const hasPreview = !data?.truncated && (isHtml || isMarkdown);
+  // A table shows a loaded prefix too, without its cut last record.
+  const hasPreview = isDelimitedTable || (!data?.truncated && (isHtml || isMarkdown));
   const effectiveDisplayMode = isDeletedDiff ? "diff" : displayMode;
   const useLightweightSource = sourceLines.length > SOURCE_HIGHLIGHT_MAX_LINES
     && !(effectiveDisplayMode === "diff" && hasGitDiff)
@@ -1383,7 +1404,7 @@ function TextFileViewer({
       <SyntaxHighlighter
         className={wrapLines ? "file-source-view is-wrapped" : "file-source-view"}
         language={language === "text" ? "plaintext" : language}
-        style={isDark ? vscDarkPlus : vs}
+        style={isDark ? fileViewerDarkTheme : vs}
         showLineNumbers
         lineNumberStyle={{
           ...FILE_LINE_NUMBER_STYLE,
@@ -1392,7 +1413,7 @@ function TextFileViewer({
           margin: 0,
           padding: 0,
           border: 0,
-          background: "var(--bg)",
+          backgroundColor: "var(--bg)",
           ...FILE_CODE_STYLE,
           width: wrapLines ? "100%" : "max-content",
           minWidth: "100%",
@@ -1402,6 +1423,7 @@ function TextFileViewer({
         codeTagProps={{
           style: {
             fontFamily: "var(--font-mono)",
+            fontWeight: "var(--font-mono-weight)",
             overflowWrap: wrapLines ? "anywhere" : "normal",
           },
         }}
@@ -1721,7 +1743,7 @@ function TextFileViewer({
             <ReactMarkdown
               remarkPlugins={markdownPreviewRemarkPlugins}
               rehypePlugins={markdownPreviewRehypePlugins}
-              urlTransform={onOpenFile ? markdownUrlTransform : undefined}
+              urlTransform={onOpenFile ? markdownUrlTransform : markdownAppUrlTransform}
               components={{
                 code({ className, children, ...props }) {
                   const lang = className?.replace("language-", "").toLowerCase() ?? "";
@@ -1750,7 +1772,10 @@ function TextFileViewer({
                     ? resolveLocalFileHref(href, markdownDirectory, cwd ?? markdownDirectory)
                     : null;
                   if (!linkedFile || !onOpenFile) {
-                    return <a href={href} {...props}>{children}</a>;
+                    // Like chat links: a web or app link must not replace Pi Web.
+                    return isExternalMarkdownHref(href)
+                      ? <a href={href} {...props} target="_blank" rel="noopener noreferrer">{children}</a>
+                      : <a href={href} {...props}>{children}</a>;
                   }
 
                   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
@@ -1778,6 +1803,13 @@ function TextFileViewer({
               {markdownPreview}
             </ReactMarkdown>
           </div>
+        ) : isDelimitedTable && effectiveDisplayMode === "preview" ? (
+          <DelimitedTable
+            content={content}
+            filePath={filePath}
+            complete={!data?.truncated}
+            scrollRef={contentRef}
+          />
         ) : useLightweightSource ? (
           <div
             className="file-source-view is-lightweight"
