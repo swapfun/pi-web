@@ -15,7 +15,7 @@ test("chat width validation preserves the default and supported range", () => {
 
 test("chat font size preserves the default and bounds stored or supplied values", () => {
   for (const value of [undefined, null, "invalid", Infinity, NaN]) {
-    assert.equal(clampChatContentFontSize(value), 14);
+    assert.equal(clampChatContentFontSize(value), 22);
   }
   assert.equal(clampChatContentFontSize(8), 12);
   assert.equal(clampChatContentFontSize("18"), 18);

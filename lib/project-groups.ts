@@ -25,6 +25,13 @@ export function getRecentProjects(sessions: readonly SessionInfo[]): RecentProje
     .map(([key, { root }]) => ({ key, root }));
 }
 
+export function sessionsForProject(
+  sessions: readonly SessionInfo[],
+  projectKey: string,
+): SessionInfo[] {
+  return sessions.filter((session) => workspaceKeyOf(session) === projectKey);
+}
+
 export function getProjectActivity(
   sessions: readonly SessionInfo[],
   runningSessionIds: ReadonlySet<string>,

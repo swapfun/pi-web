@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -20,7 +21,16 @@ const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
   tsconfigPaths: true,
 });
+const source = await readFile(new URL("./ChatMinimap.tsx", import.meta.url), "utf8");
 const { AssistantOutline, countToolCalls } = await jiti.import("./ChatMinimap.tsx");
+
+test("click-pinned previews close outside while retaining upstream minimap lock and older-turn support", () => {
+  assert.match(source, /onClick={handleRailClick}/);
+  assert.match(source, /document\.addEventListener\("pointerdown", closeOutside\)/);
+  assert.match(source, /data-minimap-lock=/);
+  assert.match(source, /turnsBefore \+ node\.index \+ 1/);
+  assert.match(source, /data-minimap-earlier=/);
+});
 
 test("renders math in headings without disabling heading navigation", () => {
   const html = renderToStaticMarkup(

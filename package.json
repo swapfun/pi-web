@@ -1,7 +1,7 @@
 {
-  "name": "@agegr/pi-web",
+  "name": "pi-swap-web",
   "version": "0.12.2",
-  "description": "Web UI for the pi coding agent",
+  "description": "A customizable web UI for the pi coding agent",
   "homepage": "https://github.com/agegr/pi-web#readme",
   "repository": {
     "type": "git",
@@ -22,7 +22,7 @@
     "ios_saf 16.2"
   ],
   "bin": {
-    "pi-web": "bin/pi-web.js"
+    "pi-swap-web": "bin/pi-swap-web.js"
   },
   "files": [
     "bin",
@@ -45,6 +45,7 @@
     "test:terminal": "node e2e/terminal.mjs",
     "test:e2e": "node e2e/run.mjs",
     "test": "node --experimental-strip-types --test \"app/**/*.test.mjs\" \"components/**/*.test.mjs\" \"hooks/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"public/**/*.test.mjs\"",
+    "update:upstream": "bash scripts/update-upstream.sh",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
   "dependencies": {

@@ -260,6 +260,7 @@ export const ChatMinimap = memo(function ChatMinimap({
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [minimapHeight, setMinimapHeight] = useState(600);
   const [minimapHovered, setMinimapHovered] = useState(false);
+  const [clickPinned, setClickPinned] = useState(false);
   const [locked, setLocked] = useState(loadMinimapPreviewLocked);
   const [mouseYRatio, setMouseYRatio] = useState<number | null>(null);
   const draggingRef = useRef(false);
@@ -570,19 +571,47 @@ export const ChatMinimap = memo(function ChatMinimap({
     saveMinimapPreviewLocked(next);
     if (next) {
       cancelPreviewHide();
+      setClickPinned(false);
       setMinimapHovered(false);
       setMouseYRatio(null);
     }
   }, [cancelPreviewHide, locked]);
 
   const schedulePreviewHide = useCallback(() => {
+    if (clickPinned) return;
     cancelPreviewHide();
     previewHideTimerRef.current = setTimeout(() => {
       previewHideTimerRef.current = null;
       setMinimapHovered(false);
       setMouseYRatio(null);
     }, PREVIEW_HIDE_DELAY);
-  }, [cancelPreviewHide]);
+  }, [cancelPreviewHide, clickPinned]);
+
+  const handleRailClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    cancelPreviewHide();
+    if (clickPinned) {
+      setClickPinned(false);
+      setMinimapHovered(false);
+      setMouseYRatio(null);
+    } else {
+      setClickPinned(true);
+      setMinimapHovered(true);
+    }
+  }, [cancelPreviewHide, clickPinned]);
+
+  useEffect(() => {
+    if (!minimapHovered) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (containerRef.current?.contains(event.target as Node)) return;
+      cancelPreviewHide();
+      setClickPinned(false);
+      setMinimapHovered(false);
+      setMouseYRatio(null);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [cancelPreviewHide, minimapHovered]);
 
   useEffect(() => () => cancelPreviewHide(), [cancelPreviewHide]);
 
@@ -640,6 +669,7 @@ export const ChatMinimap = memo(function ChatMinimap({
     <div
       ref={containerRef}
       onMouseDown={handleMouseDown}
+      onClick={handleRailClick}
       onMouseEnter={showPreview}
       onMouseLeave={schedulePreviewHide}
       onMouseMove={(event) => {

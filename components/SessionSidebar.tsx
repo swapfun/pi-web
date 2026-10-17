@@ -5,7 +5,7 @@ import type { SessionInfo } from "@/lib/types";
 import { listSessionFamilies, type SessionFamily } from "@/lib/session-family";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { newSessionDeepLink, sessionDeepLink } from "@/lib/session-links";
-import { getProjectActivity, getRecentProjects } from "@/lib/project-groups";
+import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib/project-groups";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import {
   adjacentProjectMove,
@@ -87,6 +87,8 @@ import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { PiWebTitle } from "./PiWebTitle";
 import { ProjectWorktreePicker, type ProjectWorktreePickerHandle, type WorktreeRemoval } from "./ProjectWorktreePicker";
 import { SessionSearch } from "./SessionSearch";
+import { ProjectShortcutBar } from "./ProjectShortcutBar";
+import { NEW_MESSAGE_READ_EVENT, loadNewMessageSessionIds, saveNewMessageSessionIds } from "@/lib/new-message-state";
 import { SessionTree, sessionRowTitle, type SessionTreeReveal } from "./SessionTree";
 import { SidebarMenu, type SidebarMenuAnchor, type SidebarMenuItem } from "./SidebarMenu";
 import { SidebarToast, type SidebarToastAction, type SidebarToastData } from "./SidebarToast";
@@ -99,6 +101,7 @@ import {
   DotOutlineIcon,
   EyeIcon,
   FolderIcon,
+  FolderPlusIcon,
   MessageIcon,
   MoreIcon,
   ForkIcon,
@@ -538,6 +541,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [awaitingInputSessionIds, setAwaitingInputSessionIds] = useState<Set<string>>(() => new Set());
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
+  const [newMessageSessionIds, setNewMessageSessionIds] = useState<Set<string>>(() => loadNewMessageSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   const currentSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
   const previousSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
@@ -776,6 +780,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         const next = new Set([...prev].filter((id) => unreadEligibleIds.has(id)));
         return next.size === prev.size ? prev : next;
       });
+      setNewMessageSessionIds((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Set([...prev].filter((id) => unreadEligibleIds.has(id)));
+        return next.size === prev.size ? prev : next;
+      });
       setError(null);
     } catch (e) {
       if (loadId === sessionLoadIdRef.current) setError(String(e));
@@ -874,6 +883,25 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   useEffect(() => {
     saveUnreadSessionIds(unreadSessionIds);
   }, [unreadSessionIds]);
+
+  useEffect(() => {
+    saveNewMessageSessionIds(newMessageSessionIds);
+  }, [newMessageSessionIds]);
+
+  useEffect(() => {
+    const handleRead = (event: Event) => {
+      const sessionId = (event as CustomEvent<{ sessionId?: unknown }>).detail?.sessionId;
+      if (typeof sessionId !== "string") return;
+      setNewMessageSessionIds((previous) => {
+        if (!previous.has(sessionId)) return previous;
+        const next = new Set(previous);
+        next.delete(sessionId);
+        return next;
+      });
+    };
+    window.addEventListener(NEW_MESSAGE_READ_EVENT, handleRead);
+    return () => window.removeEventListener(NEW_MESSAGE_READ_EVENT, handleRead);
+  }, []);
 
   useEffect(() => {
     let stopped = false;
@@ -978,6 +1006,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         completedWithNotifications.forEach((id) => next.add(id));
         return next;
       });
+      setNewMessageSessionIds((prev) => {
+        const next = new Set(prev);
+        newlyRunning.forEach((id) => next.delete(id));
+        completedWithNotifications.forEach((id) => next.add(id));
+        return next;
+      });
     }
     const hasUnlistedRunningSession = newlyRunning.some(
       (id) => !allSessions.some((session) => session.id === id),
@@ -1035,25 +1069,32 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     if (validatedProject?.cwd === cwd) {
       return projectSelection(validatedProject.root, validatedProject.key);
     }
-    if (worktreeState && worktreeState.forCwd === cwd) {
-      return projectSelection(worktreeState.projectRoot, worktreeState.projectKey);
-    }
-    // Any path in the loaded worktree list belongs to that project — covers
-    // worktrees without sessions, so switching to them keeps the row mounted.
-    if (worktreeState?.worktrees.some((w) => w.path === cwd)) {
-      return projectSelection(worktreeState.projectRoot, worktreeState.projectKey);
-    }
+    // Prefer an exact session/project identity. A worktree list fetched for a
+    // repository subdirectory may describe other roots with the wrong key.
     const match = allSessions.find((session) => (
       session.cwd === cwd || (session.projectRoot ?? session.cwd) === cwd
     ));
-    return match
-      ? projectSelection(match.projectRoot ?? match.cwd, workspaceKeyOf(match))
-      : projectSelection(cwd, cwd);
+    if (match) return projectSelection(match.projectRoot ?? match.cwd, workspaceKeyOf(match));
+    if (worktreeState && worktreeState.forCwd === cwd) {
+      return projectSelection(worktreeState.projectRoot, worktreeState.projectKey);
+    }
+    // Only trust sibling paths from a top-level worktree response; a
+    // subdirectory response carries a different project identity.
+    if (worktreeState?.isTopLevel && worktreeState.worktrees.some((w) => w.path === cwd)) {
+      return projectSelection(worktreeState.projectRoot, worktreeState.projectKey);
+    }
+    return projectSelection(cwd, cwd);
   }, [validatedProject, worktreeState, allSessions, projectSelection]);
 
   // The project of the sidebar's cwd: the files tab shows it, and its group in
   // the sessions tab exists even before it has a session.
   const selectedProject = useMemo(() => projectFor(selectedCwd), [projectFor, selectedCwd]);
+  // The conversation pane follows the project shortcut/selector: show only
+  // this project's sessions (including its worktrees), not every workspace.
+  const selectedProjectSessions = useMemo(
+    () => selectedProject ? sessionsForProject(allSessions, selectedProject.key) : allSessions,
+    [allSessions, selectedProject],
+  );
 
   // A worktree/session refresh can hydrate the stable key without changing
   // cwd, so notify when either changes. The parent treats same-cwd key changes
@@ -1342,6 +1383,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [selectedCwd, startNewSessionIn]);
 
   const recentProjects = useMemo(() => getRecentProjects(allSessions), [allSessions]);
+  const handleProjectShortcut = useCallback((project: { key: string; root: string }) => {
+    setValidatedProject({ cwd: project.root, root: project.root, key: project.key });
+    setSelectedCwd(project.root);
+  }, []);
 
   const sessionFamilies = useMemo(() => listSessionFamilies(allSessions), [allSessions]);
   const familyByRootId = useMemo(
@@ -1429,12 +1474,31 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     moreShown,
     pinnedCollapsed,
   }), [allSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, shownGroupExpansion, moreShown, pinnedCollapsed]);
+  // Keep the full model above for project ordering/menus, but render a scoped
+  // model in the conversation pane so switching projects never shows other
+  // projects' conversations.
+  const conversationModel = useMemo(() => buildSessionTree({
+    sessions: selectedProjectSessions,
+    uiState,
+    runningIds: runningSessionIds,
+    awaitingIds: awaitingInputSessionIds,
+    unreadIds: unreadSessionIds,
+    selectedSessionId,
+    currentProject,
+    groupExpansion: shownGroupExpansion,
+    moreShown,
+    pinnedCollapsed,
+  }), [selectedProjectSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, shownGroupExpansion, moreShown, pinnedCollapsed]);
+  const conversationRows = useMemo(
+    () => conversationModel.rows.filter((row) => row.kind !== "footer-open"),
+    [conversationModel.rows],
+  );
   // Built while the archive view is rendered, its way out included: it
   // leaves as it was, not empty.
   const archiveMounted = archiveMotion.archiveMounted;
   const archiveCollapsedSet = useMemo(() => new Set(archiveCollapsed), [archiveCollapsed]);
   const archiveRows = useMemo(() => (archiveMounted ? buildArchiveRows({
-    sessions: allSessions,
+    sessions: selectedProjectSessions,
     uiState,
     runningIds: runningSessionIds,
     awaitingIds: awaitingInputSessionIds,
@@ -1442,7 +1506,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     selectedSessionId,
     currentProject,
     collapsed: archiveCollapsedSet,
-  }) : []), [archiveMounted, allSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, archiveCollapsedSet]);
+  }) : []), [archiveMounted, selectedProjectSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, archiveCollapsedSet]);
   // The archive's projects, top to bottom, folded or not.
   const archiveGroups = useMemo(
     () => archiveRows.flatMap((row) => (row.kind === "archive-group" ? [row] : [])),
@@ -2196,7 +2260,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   // A row whose menu is open can leave the tree (archived or deleted in
   // another window): its menu goes with it.
-  const visibleRows = archiveView ? archiveRows : model.rows;
+  const visibleRows = archiveView ? archiveRows : conversationRows;
   useEffect(() => {
     if (menu?.kind === "row" && !visibleRows.some((row) => row.key === menu.row.key)) setMenu(null);
     if (menu?.kind === "archive-group" && !visibleRows.some((row) => row.key === `archive:${menu.project.key}`)) setMenu(null);
@@ -2215,12 +2279,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Re-inserted, so the choices count as the newest ones kept.
   const setAllGroupsExpanded = useCallback((expanded: (project: SidebarProject) => boolean) => {
     const next = { ...groupExpansion };
-    for (const project of model.projects) {
+    for (const project of conversationModel.projects) {
       delete next[project.key];
       next[project.key] = expanded(project);
     }
-    saveGroupChoices(next, null);
-  }, [groupExpansion, model.projects, saveGroupChoices]);
+    saveGroupChoices(next, conversationModel.projects.map((project) => project.key));
+  }, [conversationModel.projects, groupExpansion, saveGroupChoices]);
 
   // Expanding or collapsing a group only changes the view: it never moves the
   // cwd (picking a project does that, in the files tab). With Alt, every
@@ -2244,11 +2308,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // decided at the click, by position, so a row that turns selected, unread
   // or running later never shifts it.
   const handleShowMore = useCallback((key: string) => {
-    const row = model.rows.find((item) => (item.kind === "group-more" && item.projectKey === key)
+    const row = conversationModel.rows.find((item) => (item.kind === "group-more" && item.projectKey === key)
       || (item.kind === "pinned-more" && key === PINNED_MORE_KEY));
     if (row?.kind !== "group-more" && row?.kind !== "pinned-more") return;
     setMoreShown((prev) => showMoreFamilies(prev, key, row.nextShown));
-  }, [model.rows]);
+  }, [conversationModel.rows]);
   const handleShowLess = useCallback((key: string) => {
     setMoreShown((prev) => showLessFamilies(prev, key));
   }, []);
@@ -2642,6 +2706,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onArchiveGroupMenu: handleArchiveGroupMenu,
     onOpenOtherProject: handleOpenOtherProject,
     onOpenArchive: () => openArchiveView(),
+    newMessageSessionIds,
     // The archive view has no group rows: only the main tree's can be dragged.
     onMoveGroup: moveProject,
   } as const;
@@ -2674,7 +2739,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     ? ["below", t("sidebar.new")]
     : ["tabs", t("sidebar.tabSessions"), t("sidebar.tabFiles"), t("sidebar.new"), explorerCwd && changesCount > 0 ? changesCount : "", sidebarTab]
   ).join("\n"));
-  const archivedCount = model.archivedCount;
+  const archivedCount = conversationModel.archivedCount;
 
   // The files' keys: below the sessions in the files section's header row,
   // in the files tab in the row under the picker. Always the same ones in
@@ -2858,6 +2923,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           <span className="sidebar-new-label">{t("sidebar.new")}</span>
         </button>
         <button
+          type="button"
+          className="sidebar-open-project-button"
+          onClick={handleOpenOtherProject}
+          title={t("sidebar.openOtherProject")}
+          aria-label={t("sidebar.openOtherProject")}
+        >
+          <FolderPlusIcon size={15} />
+        </button>
+        <button
           ref={searchButtonRef}
           type="button"
           onClick={() => {
@@ -2896,6 +2970,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         className="sidebar-panel sidebar-sessions-panel"
         onScrollCapture={rememberScroll}
       >
+        {!archiveView && (
+          <ProjectShortcutBar
+            projects={recentProjects}
+            selectedProjectKey={selectedProject?.key ?? null}
+            activityByProject={projectActivity}
+            onSelect={handleProjectShortcut}
+          />
+        )}
         {sessionSearchOpen && (
           <div className="sidebar-search">
             <input
@@ -2932,7 +3014,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             <div className="sidebar-sessions-view" hidden={archiveMotion.mainHidden} inert={archiveMotion.mainInert}>
               <SessionTree
                 {...treeProps}
-                rows={model.rows}
+                rows={conversationRows}
                 emptyLabel={t("sidebar.noSessions")}
                 reveal={treeReveal}
                 onRevealHandled={handleRevealHandled}

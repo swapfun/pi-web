@@ -16,6 +16,7 @@ import { BranchNavigator, hasSessionBranches } from "./BranchNavigator";
 import { SystemPromptPanel } from "./SystemPromptPanel";
 import { ToolDefinitionsPanel } from "./ToolDefinitionsPanel";
 import { AgentSessionPanel } from "./AgentSessionPanel";
+import { TopUsageStatus } from "./TopUsageStatus";
 import { SubagentViewer } from "./SubagentViewer";
 import { TerminalPanel } from "./TerminalPanel";
 import { newTerminalTab, restoreTerminalTabs, TERMINAL_TABS_KEY, type TerminalTab } from "./terminal-tab-state";
@@ -349,6 +350,7 @@ export function AppShell() {
 
   // Session stats (tokens + cost) — populated by ChatWindow, displayed in top bar
   const [sessionStats, setSessionStats] = useState<SessionStatsInfo | null>(null);
+  const [usageModel, setUsageModel] = useState<{ provider: string; modelId: string } | null>(null);
   const [autoNameStatus, setAutoNameStatus] = useState<AutoNameStatus>({ kind: "idle" });
   const autoNameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeSessionIdRef = useRef<string | null>(selectedSession?.id ?? null);
@@ -779,8 +781,11 @@ export function AppShell() {
     const skipWorkspaceRestore = skipWorkspaceRestoreRef.current;
     skipWorkspaceRestoreRef.current = false;
     const newProject = projectKey ?? projectRoot ?? cwd;
-    const currentProject = activeProjectKeyRef.current
-      ?? (selectedSession ? workspaceKeyOf(selectedSession) : null);
+    // The mounted session is authoritative. The ref can briefly point at the
+    // destination while React is still clearing the previous session.
+    const currentProject = selectedSession
+      ? workspaceKeyOf(selectedSession)
+      : activeProjectKeyRef.current ?? null;
     activeProjectKeyRef.current = newProject;
 
     // Keep the project identity in sync during the initial URL restore without
@@ -2277,6 +2282,7 @@ export function AppShell() {
             <>
               {renderProjectTrustWarning(false)}
               {renderChatToolbarActions(false)}
+              <TopUsageStatus model={usageModel} sessionCost={sessionStats?.cost ?? 0} />
               {renderSessionStatsButton(false)}
             </>
           )}
@@ -2562,6 +2568,7 @@ export function AppShell() {
               onSystemToolsChange={handleSystemToolsChange}
               onSystemInfoLoaderChange={handleSystemInfoLoaderChange}
               onSessionStatsChange={handleSessionStatsChange}
+              onModelForUsageChange={setUsageModel}
               onSessionStatsPanelOpen={openSessionStatsPanel}
               onOpenSettings={openSettingsSection}
               onContextUsageChange={handleContextUsageChange}

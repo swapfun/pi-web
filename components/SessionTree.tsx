@@ -104,6 +104,8 @@ export interface SessionTreeProps {
   confirmDeleteRootId: string | null;
   /** Row whose menu is open: kept mounted, its ⋯ shown pressed. A group row's key works too. */
   activeMenuRowKey: string | null;
+  /** Background completions with a persisted reminder, separate from ordinary unread state. */
+  newMessageSessionIds?: ReadonlySet<string>;
   onSelectFamily(family: SessionFamily): void;
   /** `all` (Alt+click): every group follows this one. */
   onToggleGroup(projectKey: string, all: boolean): void;
@@ -437,6 +439,7 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
                     now={now}
                     renaming={row.family.root.id === renamingRootId}
                     confirming={row.family.root.id === confirmDeleteRootId}
+                    newMessage={props.newMessageSessionIds?.has(row.family.root.id) ?? false}
                     menuOpen={menuOpen}
                     handlers={handlersRef}
                   />
@@ -499,6 +502,7 @@ const SessionRowView = memo(function SessionRowView({
   now,
   renaming,
   confirming,
+  newMessage,
   menuOpen,
   handlers,
 }: {
@@ -509,6 +513,7 @@ const SessionRowView = memo(function SessionRowView({
   now: number;
   renaming: boolean;
   confirming: boolean;
+  newMessage: boolean;
   menuOpen: boolean;
   handlers: Handlers;
 }) {
@@ -524,6 +529,7 @@ const SessionRowView = memo(function SessionRowView({
     context === "archive" ? "is-archived" : "",
     menuOpen ? "is-menu-open" : "",
     confirming ? "is-confirming" : "",
+    newMessage ? "is-new-message" : "",
     renaming ? "is-renaming" : "",
   ].filter(Boolean).join(" ");
 

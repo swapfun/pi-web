@@ -1,4 +1,5 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { recordDeepSeekBalance } from "./deepseek-balance-history";
 import type { ProviderUsageId } from "./provider-usage-ids";
 
 export { PROVIDER_USAGE_IDS, isProviderUsageId, type ProviderUsageId } from "./provider-usage-ids";
@@ -98,11 +99,18 @@ export async function queryProviderUsage(providerId: ProviderUsageId): Promise<P
   try {
     const payload = await fetchJson(providerId, resolved.auth);
     const capturedAt = Date.now();
-    return {
-      providerId,
-      status: "ready",
-      report: normalize(providerId, payload, capturedAt),
-    };
+    const report = normalize(providerId, payload, capturedAt);
+    if (providerId === "deepseek") {
+      const credential = resolved.auth.apiKey
+        ?? resolved.auth.headers?.authorization
+        ?? resolved.auth.headers?.Authorization
+        ?? undefined;
+      const spend = await recordDeepSeekBalance(payload, credential, capturedAt);
+      if (spend) {
+        report.metrics.push({ id: "today", label: "Usage today", value: spend.todaySpend, unit: "currency", currency: spend.currency });
+      }
+    }
+    return { providerId, status: "ready", report };
   } catch {
     return { providerId, status: "query-failed", message: "The provider usage query failed." };
   }
@@ -216,7 +224,7 @@ function normalizeDeepSeek(payload: Record<string, unknown>, capturedAt: number)
     const value = record(row);
     const currency = value?.currency === "CNY" || value?.currency === "USD" ? value.currency : undefined;
     if (!currency) continue;
-    for (const [id, label, field] of [["total", "Total balance", "total_balance"], ["granted", "Granted balance", "granted_balance"], ["topped-up", "Topped-up balance", "topped_up_balance"]] as const) {
+    for (const [id, label, field] of [["remaining", "Remaining balance", "total_balance"], ["granted", "Granted balance", "granted_balance"], ["topped-up", "Topped-up balance", "topped_up_balance"]] as const) {
       const amount = decimal(value?.[field]);
       if (amount !== undefined) metrics.push({ id: `${currency.toLowerCase()}-${id}`, label, value: amount, unit: "currency", currency });
     }
