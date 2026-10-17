@@ -609,9 +609,21 @@ const SessionRowView = memo(function SessionRowView({
   } else if (context === "pinned") {
     meta = <span className="session-tree-project">{row.project.name}</span>;
   } else if (context === "archive" && row.archivedAt !== null) {
-    meta = formatShortRelativeTime(new Date(row.archivedAt), locale, nowDate);
+    meta = (
+      <>
+        <span className="session-tree-meta-count" title={details}>{details}</span>
+        <span className="session-tree-meta-divider" aria-hidden="true">·</span>
+        <span className="session-tree-meta-time">{formatShortRelativeTime(new Date(row.archivedAt), locale, nowDate)}</span>
+      </>
+    );
   } else {
-    meta = formatShortRelativeTime(family.latestModified, locale, nowDate);
+    meta = (
+      <>
+        <span className="session-tree-meta-count" title={details}>{details}</span>
+        <span className="session-tree-meta-divider" aria-hidden="true">·</span>
+        <span className="session-tree-meta-time">{formatShortRelativeTime(family.latestModified, locale, nowDate)}</span>
+      </>
+    );
   }
 
   // Archive (or restore) one click away: desktop only, never for a running
@@ -876,7 +888,7 @@ const GroupRowView = memo(function GroupRowView({
   handlers: Handlers;
 }) {
   const { t } = useI18n();
-  const { project, expanded } = row;
+  const { project } = row;
   const rowRef = useRef<HTMLDivElement>(null);
   const className = [
     "session-tree-row session-tree-group",
@@ -922,21 +934,10 @@ const GroupRowView = memo(function GroupRowView({
       data-row-key={row.key}
       onPointerDown={canDrag ? (event) => drag.onPointerDown(event, project.key) : undefined}
     >
-      <button
-        type="button"
-        className="session-tree-group-toggle"
-        aria-expanded={expanded}
-        title={project.root}
-        onClick={(event) => handlers.current.onToggleGroup(project.key, event.altKey)}
-      >
-        {/* A section header, not one more row: the chevron leads in a
-            column of its own, so the name starts where the session titles
-            below it do and every header's chevron lines up. */}
-        <ChevronIcon size={12} strokeWidth={3} className={`session-tree-chevron${expanded ? " is-open" : ""}`} />
+      <div className="session-tree-group-heading" title={project.root}>
         <span className="session-tree-group-name">{project.name}</span>
         {project.pinned && <PinIcon size={10} className="session-tree-group-pin" label={t("sidebar.pinnedProject")} />}
-        {!expanded && <ActivitySummary running={row.running} unread={row.unread} t={t} />}
-      </button>
+      </div>
       <span className="session-tree-group-actions">
         <button
           type="button"

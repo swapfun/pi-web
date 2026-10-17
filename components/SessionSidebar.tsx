@@ -1476,7 +1476,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }), [allSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, shownGroupExpansion, moreShown, pinnedCollapsed]);
   // Keep the full model above for project ordering/menus, but render a scoped
   // model in the conversation pane so switching projects never shows other
-  // projects' conversations.
+  // projects' conversations. Session groups in that pane stay expanded: the
+  // project heading is informational, not a collapse control.
+  const conversationGroupExpansion = useMemo(
+    () => Object.fromEntries(model.projects.map((project) => [project.key, true])),
+    [model.projects],
+  );
   const conversationModel = useMemo(() => buildSessionTree({
     sessions: selectedProjectSessions,
     uiState,
@@ -1485,10 +1490,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     unreadIds: unreadSessionIds,
     selectedSessionId,
     currentProject,
-    groupExpansion: shownGroupExpansion,
+    groupExpansion: conversationGroupExpansion,
     moreShown,
     pinnedCollapsed,
-  }), [selectedProjectSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, shownGroupExpansion, moreShown, pinnedCollapsed]);
+  }), [selectedProjectSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, conversationGroupExpansion, moreShown, pinnedCollapsed]);
   const conversationRows = useMemo(
     () => conversationModel.rows.filter((row) => row.kind !== "footer-open"),
     [conversationModel.rows],

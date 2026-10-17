@@ -371,6 +371,21 @@ a.session-tree-main {
   white-space: nowrap;
 }
 
+/* Session count and time share the right column without competing visually. */
+.session-tree-meta-count {
+  color: var(--text-muted);
+}
+
+.session-tree-meta-divider {
+  margin: 0 3px;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+.session-tree-meta-time {
+  color: var(--text-dim);
+}
+
 /* A pinned row's project: meta, in the time's type (.session-tree-meta). */
 .session-tree-project {
   display: inline-block;
@@ -510,14 +525,12 @@ a.session-tree-main {
   background: var(--bg-hover);
 }
 
-/* Project group header: a section header over its rows, not one more row:
-   the chevron in its column, the name bold in the label color and starting
-   where the titles do (the text color for the current project or on hover);
-   the toggle fills the row; "+" and ⋯ replace the summary on hover. Same
-   inset box as rows. It can be dragged (hooks/useGroupDrag.ts): a
-   long-press on a phone must not select its text or open the iOS callout.
-   touch-action stays as it is, so a swipe that starts on a header still
-   scrolls the list. */
+/* Project group header: a static section label above its rows; the name is
+   bold in the label color (text color for the current project or on hover).
+   "+" and ⋯ appear on hover. Same inset box as rows. It can be dragged
+   (hooks/useGroupDrag.ts): a long-press on a phone must not select its text
+   or open the iOS callout. touch-action stays as it is, so a swipe that
+   starts on a header still scrolls the list. */
 .session-tree-group {
   right: var(--session-tree-inset-right);
   left: var(--session-tree-inset-left);
@@ -612,6 +625,7 @@ a.session-tree-main {
   cursor: grabbing;
 }
 
+.session-tree-group-heading,
 .session-tree-group-toggle {
   display: flex;
   flex: 1;
@@ -627,8 +641,10 @@ a.session-tree-main {
   white-space: nowrap;
 }
 
-.session-tree-group.is-current .session-tree-group-toggle,
-.session-tree-group:hover .session-tree-group-toggle {
+.session-tree-group.is-current .session-tree-group-heading,
+.session-tree-group:hover .session-tree-group-heading,
+.session-tree-archive-group.is-current .session-tree-group-toggle,
+.session-tree-archive-group:hover .session-tree-group-toggle {
   color: var(--text);
 }
 
@@ -638,7 +654,7 @@ a.session-tree-main {
   text-overflow: ellipsis;
 }
 
-/* 5px off the name: the toggle's 3px gap is the chevron's. */
+/* A small gap keeps the pin distinct from the project name. */
 .session-tree-group-pin {
   flex: none;
   margin-left: 2px;
@@ -827,6 +843,7 @@ a.session-tree-main {
 /* Phone layout: 44px rows, a step larger type for titles and project names,
    ⋯ and the group buttons always shown, no archive quick button. */
 .session-tree.is-mobile .session-tree-title,
+.session-tree.is-mobile .session-tree-group-heading,
 .session-tree.is-mobile .session-tree-group-toggle {
   font-size: 13px;
 }

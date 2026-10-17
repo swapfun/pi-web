@@ -133,29 +133,20 @@ test("the pinned header toggles the section and shows activity dots only while c
   assert.doesNotMatch(expanded, /session-tree-pinned-dot/);
 });
 
-test("a collapsed group shows its running and unread counts and labelled actions", () => {
+test("a project heading is plain text and cannot collapse its group", () => {
   const html = rowMarkup(render({
     rows: [groupRow({ expanded: false, running: 2, unread: 1 }, { pinned: true, current: false })],
   }), "group:/work/app");
   assert.match(html, /^<div class="session-tree-row session-tree-group" style="top:0;height:28px"/);
-  assert.match(html, /<button type="button" class="session-tree-group-toggle" aria-expanded="false" title="\/work\/app">/);
-  // The chevron leads, inside the toggle (the whole header still toggles)
-  // and hidden from its accessible name; then the name, its pin, the summary.
-  assert.match(html, /title="\/work\/app"><svg width="12" height="12"[^>]*stroke-width="3"[^>]*class="session-tree-chevron" aria-hidden="true"><path[^>]*><\/path><\/svg><span class="session-tree-group-name">app<\/span>/, "the chevron precedes the name");
-  assert.match(html, /<span class="session-tree-group-name">app<\/span><svg[^>]*class="session-tree-group-pin"[\s\S]*?<\/svg><span class="session-tree-summary">/);
-  // No folder: a project group is no second file tree.
-  assert.doesNotMatch(html, /session-tree-group-icon/);
-  assert.match(html, /<svg[^>]*class="session-tree-group-pin" role="img" aria-label="Pinned"/);
-  assert.match(html, /aria-label="Agent running… \(2\)"/);
-  assert.match(html, /aria-label="New session activity \(1\)"/);
+  assert.match(html, /<div class="session-tree-group-heading" title="\/work\/app"><span class="session-tree-group-name">app<\/span><svg[^>]*class="session-tree-group-pin"/);
+  assert.doesNotMatch(html, /session-tree-group-toggle|session-tree-chevron|session-tree-summary/);
   assert.match(html, /aria-label="New session in app" title="New session in app"/);
   assert.match(html, /aria-label="app actions" title="app actions" aria-haspopup="menu" aria-expanded="false"/);
 
   const expanded = rowMarkup(render({ rows: [groupRow({ expanded: true, running: 2, unread: 1 })] }), "group:/work/app");
   assert.match(expanded, /session-tree-group is-current/);
-  assert.match(expanded, /aria-expanded="true" title="\/work\/app"/);
-  assert.doesNotMatch(expanded, /session-tree-summary/);
-  assert.doesNotMatch(expanded, /session-tree-group-pin/);
+  assert.match(expanded, /<div class="session-tree-group-heading" title="\/work\/app"><span class="session-tree-group-name">app<\/span><\/div>/);
+  assert.doesNotMatch(expanded, /session-tree-group-toggle|session-tree-chevron|session-tree-summary|session-tree-group-pin/);
 });
 
 test("a group's ⋯ shows its open menu; its + starts a session at once", () => {
@@ -175,7 +166,7 @@ test("an idle session row shows its short time, branch and both actions", () => 
   // Nothing before the title: it gets the room; the time sits at the right.
   // A saved session's title is a real link to it (middle-click, Ctrl/Cmd-click).
   // The branch keeps the upstream icon and type; the tooltip keeps the ⑂ glyph.
-  assert.match(html, /<a class="session-tree-main" href="\?session=idle" title="[^"]*"><span class="session-tree-title">first idle<\/span><span class="session-tree-branch"><svg width="10" height="10"[^>]*class="session-tree-branch-icon" aria-hidden="true">[\s\S]*?<\/svg>feat\/rows<\/span><span class="session-tree-meta">5m<\/span><\/a>/);
+  assert.match(html, /<a class="session-tree-main" href="\?session=idle" title="[^"]*"><span class="session-tree-title">first idle<\/span><span class="session-tree-branch"><svg width="10" height="10"[^>]*class="session-tree-branch-icon" aria-hidden="true">[\s\S]*?<\/svg>feat\/rows<\/span><span class="session-tree-meta"><span class="session-tree-meta-count" title="3 msgs">3 msgs<\/span><span class="session-tree-meta-divider" aria-hidden="true">·<\/span><span class="session-tree-meta-time">5m<\/span><\/span><\/a>/);
   assert.match(html, /title="first idle\n3 msgs · 5 minutes ago · ⑂ feat\/rows"/);
   assert.match(html, /class="session-tree-action session-tree-quick-action" aria-label="Archive" title="Archive"/);
   assert.match(html, /class="session-tree-action session-tree-more-action" aria-label="More actions" title="More actions" aria-haspopup="menu" aria-expanded="false"/);
@@ -295,7 +286,7 @@ test("pinned rows name their project and archived rows offer restore with the ar
   }), "session:archive:old");
   assert.match(archived, /class="session-tree-row session-tree-session is-archived"/);
   assert.doesNotMatch(archived, /session-tree-slot/);
-  assert.match(archived, /<span class="session-tree-meta">2h<\/span>/);
+  assert.match(archived, /<span class="session-tree-meta"><span class="session-tree-meta-count" title="3 msgs">3 msgs<\/span><span class="session-tree-meta-divider" aria-hidden="true">·<\/span><span class="session-tree-meta-time">2h<\/span><\/span>/);
   assert.match(archived, /aria-label="Restore" title="Restore"/);
   assert.doesNotMatch(archived, /aria-label="Archive"/);
 });
@@ -312,6 +303,7 @@ test("the phone layout uses tall rows, keeps ⋯ and drops the archive quick but
 
 test("a summary row without details shows an ellipsis instead of a message count", () => {
   const html = render({ rows: [sessionRow(session("p", { detailsPending: true, name: "Named" }))] });
+  assert.match(html, /class="session-tree-meta-count" title="…">…<\/span><span class="session-tree-meta-divider" aria-hidden="true">·<\/span><span class="session-tree-meta-time">5m<\/span>/);
   assert.match(html, /title="Named\n… · 5 minutes ago"/);
 });
 
@@ -325,7 +317,8 @@ test("rename mode swaps the row for a field seeded with the title", () => {
 test("a named project shows its name as plain text in its header, the path as the tooltip", () => {
   const named = { name: "Thermal <b>Models</b>", customName: "Thermal <b>Models</b>" };
   const raw = renderToStaticMarkup(h(I18nProvider, null, h(SessionTree, { ...defaults, rows: [groupRow({}, named)] })));
-  assert.match(raw, /title="\/work\/app"><svg[^>]*class="session-tree-chevron is-open"[\s\S]*?<\/svg><span class="session-tree-group-name">Thermal &lt;b&gt;Models&lt;\/b&gt;<\/span>/);
+  assert.match(raw, /<div class="session-tree-group-heading" title="\/work\/app"><span class="session-tree-group-name">Thermal &lt;b&gt;Models&lt;\/b&gt;<\/span><\/div>/);
+
   assert.doesNotMatch(raw, /<b>/, "never markup");
   const html = render({ rows: [groupRow({}, named)] });
   assert.match(html, /aria-label="New session in Thermal <b>Models<\/b>"/);
@@ -338,7 +331,7 @@ test("a project's rename swaps its header for a name field seeded with the name 
   assert.match(html, /<input class="session-tree-rename" aria-label="Project name" maxLength="80" value="Thermal Models"\/>/);
   assert.doesNotMatch(html, /session-tree-group-toggle|session-tree-group-actions/);
   // Another group, or none being renamed: the header as usual.
-  assert.match(rowMarkup(render({ rows: [groupRow()], renamingProjectKey: "/elsewhere" }), "group:/work/app"), /session-tree-group-toggle/);
+  assert.match(rowMarkup(render({ rows: [groupRow()], renamingProjectKey: "/elsewhere" }), "group:/work/app"), /session-tree-group-heading/);
 });
 
 test("delete confirmation shows a shortened title and both answers", () => {
@@ -506,25 +499,22 @@ test("a row's controls fit its height with room to spare: 28px rows on a desktop
   }
 });
 
-test("headers lead with their chevron, and every row's text starts in one column", () => {
+test("archive and pinned headers keep chevrons while every row stays aligned", () => {
   // The left inset is 6px in every browser, the grid the brand, the files'
   // header, the picker and the file tree keep; a classic scrollbar takes its
   // room from the right only.
   assert.match(cssRule(".session-tree-scroll"), /--session-tree-inset-left: 6px;\s*--session-tree-inset-right: max\(0px, calc\(6px - var\(--session-tree-scrollbar, 0px\)\)\);/);
 
-  // The text column: the toggle's left padding, the 12px chevron and the
-  // gap. Session titles, "show more", the empty group's note, the archive's
-  // project names and the footer's labels (their 12px icons in the
-  // chevron column) start there too. The last length of a padding
-  // shorthand is its left side.
+  // The project label is inset slightly from the section edge; session titles,
+  // "show more", the empty note and footer labels retain their icon column.
   const lastPx = (rule, property) => {
     const value = cssRule(rule).match(new RegExp(`(?:^|\\n)\\s*${property}: ([^;]+);`))[1];
     return Number(value.trim().split(/\s+/).at(-1).replace(/px\)?$/, ""));
   };
-  const textStart = lastPx(".session-tree-group-toggle", "padding") + 12 + lastPx(".session-tree-group-toggle", "gap");
+  assert.match(css, /\.session-tree-group-heading,\s*\.session-tree-group-toggle \{[^}]*padding: 0 0 0 5px;/);
+  const textStart = lastPx(".session-tree-session", "padding");
   assert.equal(textStart, 20);
-  assert.equal(lastPx(".session-tree-session", "padding"), textStart);
-  // A group header's toggle starts at the row's own left edge.
+  // A group header starts at the row's own left edge.
   assert.match(cssRule(".session-tree-group"), /padding: 0 4px 0 0;/);
   assert.equal(lastPx(".session-tree-footer-button", "padding") + 12 + lastPx(".session-tree-footer-button", "gap"), textStart);
   assert.deepEqual([...source.matchAll(/<(?:FolderPlus|Archive)Icon size=\{(\d+)\} \/>\s*<span className="session-tree-footer-label">/g)].map((match) => Number(match[1])), [12, 12]);
@@ -535,7 +525,7 @@ test("headers lead with their chevron, and every row's text starts in one column
   assert.match(cssRule(".session-tree-pinned-toggle"), /padding: 0 8px 0 calc\(var\(--session-tree-inset-left\) \+ 5px\);/);
 
   // No layout overrides these paddings, so phones line up the same way.
-  assert.doesNotMatch(css, /\.is-mobile \.session-tree-(?:session|group-toggle|group-empty|more|pinned-toggle|archive-group|footer-button) \{[^}]*padding/);
+  assert.doesNotMatch(css, /\.is-mobile \.session-tree-(?:session|group-heading|group-toggle|group-empty|more|pinned-toggle|archive-group|footer-button) \{[^}]*padding/);
   // One rhythm: session rows, every header (a project's, the pinned
   // section's, the archive's projects), the empty note and the footer are
   // one height, 28px (44px on a phone); only "show more" is shorter.
