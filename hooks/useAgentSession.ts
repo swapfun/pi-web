@@ -1562,12 +1562,24 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
         // Live-follow the streaming output only when the user is already near
         // the bottom of the message list. If they scrolled up, leave them there.
-        if (!pendingScrollToUserRef.current && isNearBottomRef.current && liveFollowFrameRef.current === null) {
-          // Defer the scroll so React has time to update the DOM with the new
-          // streaming content; otherwise scrollIntoView may target stale layout.
+        if (liveFollowFrameRef.current === null) {
+          // Wait for React to commit the streamed content before measuring the
+          // tail. Follow it only while attached; otherwise reveal the
+          // scroll-to-latest affordance as the content grows.
           liveFollowFrameRef.current = requestAnimationFrame(() => {
             liveFollowFrameRef.current = null;
-            if (isNearBottomRef.current) scrollToBottom("auto");
+            const container = scrollContainerRef.current;
+            if (!container) return;
+            if (isNearBottomRef.current) {
+              scrollToBottom("auto");
+              return;
+            }
+            const shouldShow = shouldShowScrollToLatest(
+              container.scrollTop,
+              container.clientHeight,
+              container.scrollHeight,
+            );
+            setShowScrollToBottom((previous) => previous === shouldShow ? previous : shouldShow);
           });
         }
         break;
@@ -1771,8 +1783,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setAgentRunning(true);
     setAgentPhase(isSlashCommandPrompt ? { kind: "running_command" } : { kind: "waiting_model" });
     dispatch({ type: "start" });
-    pendingScrollToUserRef.current = true;
-    setPromptAnchorActive(true);
 
     const piImages = images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
     let sentSessionId: string | null = null;
@@ -2665,6 +2675,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [agentRunning]);
 
   useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (container) {
+      const shouldShow = shouldShowScrollToLatest(
+        container.scrollTop,
+        container.clientHeight,
+        container.scrollHeight,
+      );
+      setShowScrollToBottom((previous) => previous === shouldShow ? previous : shouldShow);
+    }
     if (messages.length > 0) {
       if (pendingScrollToUserRef.current) {
         pendingScrollToUserRef.current = false;

@@ -337,6 +337,21 @@ html.dark .catppuccin-file-icon {
   box-sizing: border-box;
 }
 
+/* Scale UI outside the central conversation; ChatWindow and its composer stay unchanged. */
+.sidebar-container,
+.app-top-bar,
+.right-panel-container,
+.settings-dialog-surface,
+.sidebar-menu,
+.sidebar-sheet,
+.project-trust-dialog,
+.directory-picker-panel,
+.image-preview-dialog,
+.mermaid-zoom-dialog,
+.config-panel-surface {
+  zoom: var(--non-chat-ui-scale, 1);
+}
+
 html, body {
   width: 100%;
   height: 100vh;
