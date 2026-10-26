@@ -300,6 +300,7 @@ export const zhTWLocale: LocalePlugin = {
     "sidebar.noMatchingProjects": "找不到相符的專案",
     "sidebar.useDefaultDirectory": "使用預設目錄",
     "sidebar.customPath": "自訂路徑…",
+    "sidebar.newProjectLocation": "選擇或新增專案位置…",
     "directoryPicker.selectDirectory": "選擇目錄",
     "directoryPicker.goToParent": "前往上一層目錄",
     "directoryPicker.directoryPath": "目錄路徑",

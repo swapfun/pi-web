@@ -27,8 +27,8 @@ export type WorktreeRemoval = "removed" | "dirty" | { error: string };
 export interface ProjectWorktreePickerHandle {
   /** The control's button, while it is shown. */
   button(control: ProjectWorktreeControl): HTMLButtonElement | null;
-  /** Opens the control's menu below its button (the sessions tab's "Open another project…"). */
-  openMenu(control: ProjectWorktreeControl): void;
+  /** Opens the control's menu below its button, or below a supplied trigger. */
+  openMenu(control: ProjectWorktreeControl, opener?: HTMLElement): void;
 }
 
 type MenuBody =
@@ -282,8 +282,8 @@ export function ProjectWorktreePicker({
 
   useImperativeHandle(handleRef, () => ({
     button: (control) => (control === "worktree" ? worktreeRef : projectRef).current,
-    openMenu: (control) => {
-      const button = (control === "worktree" ? worktreeRef : projectRef).current;
+    openMenu: (control, opener) => {
+      const button = opener ?? (control === "worktree" ? worktreeRef : projectRef).current;
       if (button) openMenuRef.current(control, button);
     },
   }), []);
@@ -375,24 +375,26 @@ export function ProjectWorktreePicker({
         },
       };
     });
-    // No project yet (a first run): the two folder items alone, no line above them.
+    // Keep the way to choose or create a project location at the top: it
+    // should not disappear below a long list of recent projects.
     const separator: SidebarMenuItem[] = choices.length > 0 ? [{ type: "separator", id: "separator" }] : [];
     return [
-      ...choices,
+      {
+        type: "item",
+        id: "new-project-location",
+        label: t("sidebar.newProjectLocation"),
+        icon: <FolderPlusIcon size={13} />,
+        onSelect: () => onOpenFolder(menu?.opener ?? null),
+      },
       ...separator,
+      ...choices,
+      ...(choices.length > 0 ? [{ type: "separator", id: "separator-default" } as const] : []),
       {
         type: "item",
         id: "default-directory",
         label: t("sidebar.useDefaultDirectory"),
         icon: <FolderIcon size={13} />,
         onSelect: () => onUseDefaultDirectory(),
-      },
-      {
-        type: "item",
-        id: "open-folder",
-        label: t(classic ? "sidebar.customPath" : "sidebar.openOtherProject"),
-        icon: classic ? <PlusIcon size={13} /> : <FolderPlusIcon size={13} />,
-        onSelect: () => onOpenFolder(menu?.opener ?? null),
       },
     ];
   };

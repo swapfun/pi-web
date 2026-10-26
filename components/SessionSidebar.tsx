@@ -631,6 +631,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // show (below the sessions), hence the counter.
   const filesFocusRef = useRef<"project-button" | "project-list" | "file-search" | null>(null);
   const [filesFocusRequest, setFilesFocusRequest] = useState(0);
+  const openProjectButtonRef = useRef<HTMLButtonElement>(null);
   const contextMenuFocusRef = useRef<HTMLElement | null>(null);
   // The composer's "Open another project…": where the validated folder goes,
   // and the control focus returns to when the composer does not move.
@@ -2356,18 +2357,16 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const handleOpenOtherProject = () => {
     revealFiles("project-list");
   };
-  // Once the files show, the project button takes the focus, or its menu
-  // opens below it (the menu takes the focus: its filter or first project),
+  // Once the files show, the project button takes focus, or its menu opens
+  // below the toolbar trigger (not the picker at the bottom of the sidebar),
   // or the file search field does. Below the sessions they may show already:
-  // the request counter runs it all the same. An unfolding section is not
-  // shown yet: its button is still below the sidebar's edge, where the
-  // project menu would be placed.
+  // the request counter runs it all the same.
   const filesShown = stacked ? filesFold.open : sidebarTab === "files";
   useEffect(() => {
     const target = filesFocusRef.current;
     if (!target || !filesShown) return;
     filesFocusRef.current = null;
-    if (target === "project-list") filesPickerRef.current?.openMenu("project");
+    if (target === "project-list") filesPickerRef.current?.openMenu("project", openProjectButtonRef.current ?? undefined);
     else if (target === "file-search") document.getElementById("file-search-input")?.focus({ preventScroll: true });
     else filesPickerRef.current?.button("project")?.focus({ preventScroll: true });
   }, [filesShown, filesFocusRequest]);
@@ -2929,6 +2928,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         </button>
         <button
           type="button"
+          ref={openProjectButtonRef}
           className="sidebar-open-project-button"
           onClick={handleOpenOtherProject}
           title={t("sidebar.openOtherProject")}
